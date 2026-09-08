@@ -859,8 +859,6 @@ class MainWindow(QMainWindow):
             return
 
         summary = self.cmd_manager.import_commands(selected)
-        if summary["imported"]:
-            self.cmd_manager.reprocess_command_icons(self.icon_manager)
         imported_count = len(summary["imported"])
         skipped_count = len(summary["skipped"])
         message = f"Imported {imported_count} command"

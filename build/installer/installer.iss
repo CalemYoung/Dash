@@ -2,7 +2,7 @@
 ; Calem Young
 
 #define MyAppName "Dash"
-#define MyAppVersion "2.2.1"
+#define MyAppVersion "2.2.2"
 #define MyAppPublisher "Calem Young"
 #define MyAppURL "https://github.com/calemyoung/Dash"
 #define MyAppExeName "Dash.exe"

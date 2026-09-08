@@ -628,7 +628,12 @@ class ImportCommandsDialog(DragToMoveMixin, QDialog):
         self.setMinimumSize(560, 680)
         self._command_manager = command_manager
         self._icon_manager = icon_manager
-        self._icon_provider = QFileIconProvider()
+        self._preview_icons = {}
+        if icon_manager is not None:
+            self._preview_icons = {
+                "file": QIcon(icon_manager.settings.paths.file_icon),
+                "url": QIcon(icon_manager.settings.paths.url_command_icon),
+            }
 
         title = QLabel("Import Commands")
         title.setObjectName("dialogTitle")
@@ -707,7 +712,7 @@ class ImportCommandsDialog(DragToMoveMixin, QDialog):
         item.setFlags(item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
         item.setCheckState(Qt.CheckState.Unchecked)
         if error:
-            item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsEnabled)
+            item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsUserCheckable)
             item.setForeground(QColor("#d9534f"))
         if row is None:
             self.command_list.addItem(item)
@@ -718,23 +723,18 @@ class ImportCommandsDialog(DragToMoveMixin, QDialog):
     def _resolve_icon(self, candidate: dict) -> QIcon:
         if candidate.get("_error"):
             return QIcon()
-        if self._icon_manager is not None:
-            icon = self._icon_manager.resolve_command_icon(candidate)
-            if not icon.isNull():
-                return icon
-        location = candidate.get("location", "")
-        info = QFileInfo(str(location))
-        if info.exists():
-            icon = self._icon_provider.icon(info)
-            if not icon.isNull():
-                return icon
-        return QIcon()
+        icon_type = "url" if candidate.get("type") == "url" else "file"
+        return self._preview_icons.get(icon_type, QIcon())
 
     def _set_all_checked(self, state: Qt.CheckState):
-        for index in range(self.command_list.count()):
-            item = self.command_list.item(index)
-            if item is not None and item.flags() & Qt.ItemFlag.ItemIsEnabled:
-                item.setCheckState(state)
+        self.command_list.blockSignals(True)
+        try:
+            for index in range(self.command_list.count()):
+                item = self.command_list.item(index)
+                if item is not None and item.flags() & Qt.ItemFlag.ItemIsUserCheckable:
+                    item.setCheckState(state)
+        finally:
+            self.command_list.blockSignals(False)
         self._update_import_enabled()
 
     def _update_import_enabled(self, _item=None):

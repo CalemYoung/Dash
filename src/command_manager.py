@@ -136,6 +136,14 @@ class CommandManager:
             cfg = tomllib.load(f)
         return cfg.get("command", [])
 
+    @staticmethod
+    def _command_locations(commands: list[dict]) -> set[str]:
+        return {
+            os.path.normcase(os.path.abspath(str(command.get("location", ""))))
+            for command in commands
+            if command.get("location")
+        }
+
     def validate_target(self, command: dict) -> str | None:
         """Return an error if a command's location doesn't point at something real."""
         command_type = command.get("type", "file")
@@ -154,11 +162,17 @@ class CommandManager:
                 return "Choose an existing file."
         return None
 
-    def _reserved_keywords(self, exclude_name: str | None = None) -> dict[str, str]:
+    def _reserved_keywords(
+        self,
+        exclude_name: str | None = None,
+        *,
+        commands: list[dict] | None = None,
+    ) -> dict[str, str]:
         """Map every keyword (name/alias) already in use to the command name that owns it."""
         exclude_key = exclude_name.strip().casefold() if exclude_name else None
         reserved: dict[str, str] = {}
-        for existing in [*self._get_system_commands(), *self._read_raw_commands()]:
+        user_commands = self._read_raw_commands() if commands is None else commands
+        for existing in [*self._get_system_commands(), *user_commands]:
             existing_name = str(existing.get("name", "")).strip()
             if existing_name.casefold() == exclude_key:
                 continue
@@ -323,8 +337,9 @@ class CommandManager:
         with file_path.open("rb") as f:
             cfg = tomllib.load(f)
 
-        existing_locations = self.existing_command_locations()
-        reserved = self._reserved_keywords()
+        existing_commands = self._read_raw_commands()
+        existing_locations = self._command_locations(existing_commands)
+        reserved = self._reserved_keywords(commands=existing_commands)
 
         candidates = []
         for cmd_data in cfg.get("command", []):
@@ -358,8 +373,8 @@ class CommandManager:
     def import_commands(self, candidates: list[dict]) -> dict:
         """Append selected imported commands, never overriding existing ones."""
         commands = self._read_raw_commands()
-        existing_locations = self.existing_command_locations()
-        reserved = self._reserved_keywords()
+        existing_locations = self._command_locations(commands)
+        reserved = self._reserved_keywords(commands=commands)
 
         imported: list[str] = []
         skipped: list[str] = []
@@ -406,11 +421,7 @@ class CommandManager:
 
     def existing_command_locations(self) -> set[str]:
         """Return normalized locations of user commands already stored on disk."""
-        return {
-            os.path.normcase(os.path.abspath(str(command.get("location", ""))))
-            for command in self._read_raw_commands()
-            if command.get("location")
-        }
+        return self._command_locations(self._read_raw_commands())
 
     def reprocess_command_icons(self, icon_manager, force: bool = False) -> dict:
         """Resolve and store a permanent icon for every user command.
