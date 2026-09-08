@@ -2,7 +2,7 @@
 ; Calem Young
 
 #define MyAppName "Dash"
-#define MyAppVersion "2.2.0"
+#define MyAppVersion "2.2.1"
 #define MyAppPublisher "Calem Young"
 #define MyAppURL "https://github.com/calemyoung/Dash"
 #define MyAppExeName "Dash.exe"
@@ -190,6 +190,7 @@ function InitializeUninstall(): Boolean;
 var
   Response: Integer;
 begin
+  AppDataPath := ExpandConstant('{userappdata}\{#MyAppName}');
   Result := True;
   
   Response := MsgBox('Do you want to keep your personal settings and commands?' + #13#10 + #13#10 + 

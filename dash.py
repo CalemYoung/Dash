@@ -4,7 +4,7 @@ import shutil
 import os
 import traceback
 
-__version__ = "2.2.0"
+__version__ = "2.2.1"
 
 
 def get_app_data_dir():
