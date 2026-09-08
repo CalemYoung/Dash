@@ -1,6 +1,6 @@
 from dataclasses import asdict
 from pathlib import Path
-from typing import cast
+from typing import Any, cast
 
 from PyQt6.QtCore import QFileInfo, QSize, Qt, pyqtSignal
 from PyQt6.QtGui import QColor, QIcon, QKeySequence, QPainter, QPen, QShortcut
@@ -9,6 +9,7 @@ from PyQt6.QtWidgets import (
     QDialog,
     QDialogButtonBox,
     QDoubleSpinBox,
+    QColorDialog,
     QFileDialog,
     QFileIconProvider,
     QFormLayout,
@@ -86,6 +87,39 @@ class HotkeyLineEdit(QLineEdit):
         if text:
             self.setText(text)
         event.accept()
+
+
+class ColorButton(QPushButton):
+    colorChanged = pyqtSignal(str)
+
+    def __init__(self, value, parent=None):
+        super().__init__(parent)
+        color = QColor(str(value))
+        self._color = color if color.isValid() else QColor(Qt.GlobalColor.white)
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.setMinimumWidth(110)
+        self.clicked.connect(self._choose_color)
+        self._update_swatch()
+
+    def color(self) -> str:
+        return self._color.name(QColor.NameFormat.HexRgb)
+
+    def _choose_color(self):
+        selected = QColorDialog.getColor(self._color, self, "Choose Text Color")
+        if not selected.isValid() or selected == self._color:
+            return
+        self._color = selected
+        self._update_swatch()
+        self.colorChanged.emit(self.color())
+
+    def _update_swatch(self):
+        color = self.color()
+        text_color = "#111318" if self._color.lightness() > 150 else "#ffffff"
+        self.setText(color.upper())
+        self.setStyleSheet(
+            f"background-color: {color}; color: {text_color}; "
+            "border: 1px solid #596170; border-radius: 6px; padding: 6px 10px;"
+        )
 
 
 class XCheckBox(QCheckBox):
@@ -244,6 +278,10 @@ class SettingsEditorPanel(QFrame):
         control.setChecked(value is True or str(value).lower() == "true")
         return control
 
+    @staticmethod
+    def _color(value):
+        return ColorButton(value)
+
     def _ui_group(self):
         opacity = NoScrollDoubleSpinBox()
         opacity.setRange(0.30, 1.00)
@@ -259,12 +297,22 @@ class SettingsEditorPanel(QFrame):
                 ("Editor height", "ui.editor_height", self._spin(self._settings.ui.editor_height, 400, 1400)),
                 ("Window opacity", "ui.window_opacity", opacity),
                 ("Search font size", "ui.search_font_size", self._spin(self._settings.ui.search_font_size, 8, 48)),
+                ("Search text color", "ui.search_text_color", self._color(self._settings.ui.search_text_color)),
                 ("Result font size", "ui.result_font_size", self._spin(self._settings.ui.result_font_size, 8, 32)),
+                ("Result text color", "ui.result_text_color", self._color(self._settings.ui.result_text_color)),
                 (
                     "Description font size",
                     "ui.description_font_size",
                     self._spin(self._settings.ui.description_font_size, 7, 24),
                 ),
+                (
+                    "Description text color",
+                    "ui.description_text_color",
+                    self._color(self._settings.ui.description_text_color),
+                ),
+                ("Clock font size", "ui.clock_font_size", self._spin(self._settings.ui.clock_font_size, 6, 18)),
+                ("Clock day color", "ui.clock_day_text_color", self._color(self._settings.ui.clock_day_text_color)),
+                ("Clock date color", "ui.clock_date_text_color", self._color(self._settings.ui.clock_date_text_color)),
             ],
         )
 
@@ -337,8 +385,10 @@ class SettingsEditorPanel(QFrame):
         layout.addWidget(import_button)
         return group
 
-    def _value(self, key):
+    def _value(self, key) -> Any:
         control = self._controls[key]
+        if isinstance(control, ColorButton):
+            return control.color()
         if isinstance(control, QCheckBox):
             return control.isChecked()
         if isinstance(control, (QSpinBox, QDoubleSpinBox)):
@@ -358,8 +408,14 @@ class SettingsEditorPanel(QFrame):
                 editor_height=self._value("ui.editor_height"),
                 window_opacity=self._value("ui.window_opacity"),
                 search_font_size=self._value("ui.search_font_size"),
+                search_text_color=self._value("ui.search_text_color"),
                 result_font_size=self._value("ui.result_font_size"),
+                result_text_color=self._value("ui.result_text_color"),
                 description_font_size=self._value("ui.description_font_size"),
+                description_text_color=self._value("ui.description_text_color"),
+                clock_font_size=self._value("ui.clock_font_size"),
+                clock_day_text_color=self._value("ui.clock_day_text_color"),
+                clock_date_text_color=self._value("ui.clock_date_text_color"),
             ),
             search=SearchSettings(
                 max_results=self._value("search.max_results"),
@@ -391,7 +447,9 @@ class SettingsEditorPanel(QFrame):
 
     def _connect_signals(self):
         for control in self._controls.values():
-            if isinstance(control, QLineEdit):
+            if isinstance(control, ColorButton):
+                control.colorChanged.connect(self._update_dirty_state)
+            elif isinstance(control, QLineEdit):
                 control.textChanged.connect(self._update_dirty_state)
             elif isinstance(control, QCheckBox):
                 control.toggled.connect(self._update_dirty_state)
@@ -473,8 +531,9 @@ class ProgramImportDialog(DragToMoveMixin, QDialog):
     def showEvent(self, event):
         # Frameless windows are not placed or focused by the window manager
         super().showEvent(event)
-        if self.parent() is not None:
-            center = self.parent().frameGeometry().center()
+        parent = self.parentWidget()
+        if parent is not None:
+            center = parent.frameGeometry().center()
             self.move(center - self.rect().center())
         self.raise_()
         self.activateWindow()
@@ -572,8 +631,9 @@ class ExportCommandsDialog(DragToMoveMixin, QDialog):
 
     def showEvent(self, event):
         super().showEvent(event)
-        if self.parent() is not None:
-            center = self.parent().frameGeometry().center()
+        parent = self.parentWidget()
+        if parent is not None:
+            center = parent.frameGeometry().center()
             self.move(center - self.rect().center())
         self.raise_()
         self.activateWindow()
@@ -695,8 +755,9 @@ class ImportCommandsDialog(DragToMoveMixin, QDialog):
 
     def showEvent(self, event):
         super().showEvent(event)
-        if self.parent() is not None:
-            center = self.parent().frameGeometry().center()
+        parent = self.parentWidget()
+        if parent is not None:
+            center = parent.frameGeometry().center()
             self.move(center - self.rect().center())
         self.raise_()
         self.activateWindow()

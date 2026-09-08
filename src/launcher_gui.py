@@ -22,6 +22,16 @@ import win32process
 import win32api
 
 
+def _text_style(color_value: str, point_size: int | None = None) -> str:
+    declarations = []
+    if point_size is not None:
+        declarations.append(f"font-size: {point_size}pt")
+    color = QColor(str(color_value))
+    if color.isValid():
+        declarations.append(f"color: {color.name(QColor.NameFormat.HexRgb)}")
+    return "; ".join(declarations) + ";"
+
+
 class SearchTreeWidget(QWidget):
     def __init__(self, scale: float, parent=None):
         super().__init__(parent)
@@ -297,9 +307,7 @@ class MainWindow(QMainWindow):
         self.search_input_widget = QLineEdit()
         self.search_input_widget.setObjectName("SearchInput")
         self.search_input_widget.setPlaceholderText("Type a command...")
-        font = self.search_input_widget.font()
-        font.setPointSize(self.settings.ui.search_font_size)
-        self.search_input_widget.setFont(font)
+        self._apply_search_text_style()
         self.search_input_widget.installEventFilter(self)
         self.search_input_widget.textChanged.connect(self.on_text_change)
         self.search_input_widget.returnPressed.connect(self.on_enter_pressed)
@@ -313,10 +321,9 @@ class MainWindow(QMainWindow):
         self.date_info_day_label.setObjectName("SearchMetaDay")
         self.date_info_date_label = QLabel()
         self.date_info_date_label.setObjectName("SearchMetaDate")
-        self.date_info_day_label.setFixedHeight(18)
-        self.date_info_date_label.setFixedHeight(18)
         self.date_info_day_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.date_info_date_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._apply_clock_text_style()
 
         # 3: Create results widget
         self.results_list_widget = QListWidget()
@@ -431,6 +438,24 @@ class MainWindow(QMainWindow):
         self.new_command_shortcut = QShortcut(QKeySequence(self.settings.shortcuts.new_command), self.central_widget)
         self.new_command_shortcut.setContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
         self.new_command_shortcut.activated.connect(self.open_new_command)
+
+    def _apply_search_text_style(self):
+        self.search_input_widget.setStyleSheet(
+            _text_style(self.settings.ui.search_text_color, self.settings.ui.search_font_size)
+        )
+
+    def _apply_clock_text_style(self):
+        day_size = self.settings.ui.clock_font_size
+        date_size = max(6, day_size - 1)
+        self.date_info_day_label.setStyleSheet(_text_style(self.settings.ui.clock_day_text_color, day_size))
+        self.date_info_date_label.setStyleSheet(_text_style(self.settings.ui.clock_date_text_color, date_size))
+        self.date_info_day_label.setFixedHeight(self.date_info_day_label.fontMetrics().height() + 2)
+        self.date_info_date_label.setFixedHeight(self.date_info_date_label.fontMetrics().height() + 2)
+        text_width = max(
+            self.date_info_day_label.fontMetrics().horizontalAdvance("Wednesday"),
+            self.date_info_date_label.fontMetrics().horizontalAdvance("30 September"),
+        )
+        self.date_info_widget.setFixedWidth(max(round(88 * self._layout_scale), text_width + 12))
 
     def eventFilter(self, obj, event):
         """Catch key presses on the input box"""
@@ -617,13 +642,11 @@ class MainWindow(QMainWindow):
             self._hotkey_listener.update_hotkey(settings.general.hotkey)
         self.edit_shortcut.setKey(QKeySequence(settings.shortcuts.edit_selected_command))
         self.new_command_shortcut.setKey(QKeySequence(settings.shortcuts.new_command))
-        search_font = self.search_input_widget.font()
-        search_font.setPointSize(settings.ui.search_font_size)
-        self.search_input_widget.setFont(search_font)
+        self._apply_search_text_style()
         self._layout_scale = max(0.8, min(1.4, settings.ui.program_width / 500))
         self._layout_margin = max(10, round(10 * self._layout_scale))
         self._layout_spacing = max(10, round(10 * self._layout_scale))
-        self.date_info_widget.setFixedWidth(max(88, round(88 * self._layout_scale)))
+        self._apply_clock_text_style()
         self.footer_height = max(24, round(24 * self._layout_scale))
         self.footer_widget.setFixedHeight(self.footer_height)
         search_layout = self.search_container_widget.layout()
@@ -641,6 +664,7 @@ class MainWindow(QMainWindow):
         )
         if self.user_text:
             self._update_search_tree(self.user_text)
+            self.cmd_manager.get_matching_commands(self, self.user_text)
         else:
             self._update_search_tree("")
             self._clear_and_hide_results()
@@ -1054,6 +1078,7 @@ class ResultRow(QWidget):
         command_font = self.command_label.font()
         command_font.setPointSize(main_window.settings.ui.result_font_size)
         self.command_label.setFont(command_font)
+        self.command_label.setStyleSheet(_text_style(main_window.settings.ui.result_text_color))
 
         # Description label (gray, smaller)
         self.description_label = QLabel(description)
@@ -1061,6 +1086,7 @@ class ResultRow(QWidget):
         description_font = self.description_label.font()
         description_font.setPointSize(main_window.settings.ui.description_font_size)
         self.description_label.setFont(description_font)
+        self.description_label.setStyleSheet(_text_style(main_window.settings.ui.description_text_color))
 
         self.mode_label = QLabel("")
         self.mode_label.setObjectName("ResultModeLabel")

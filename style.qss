@@ -7,7 +7,6 @@
 #SearchInput {
     background: transparent;
     border: none;
-    color: #f3f4f7;
     placeholder-text-color: #8f96a3;
     selection-background-color: #2d7dff;
     selection-color: #ffffff;
@@ -47,14 +46,7 @@
 }
 
 #SearchMetaDay {
-    color: #f3f4f7;
-    font-size: 11px;
     font-weight: 600;
-}
-
-#SearchMetaDate {
-    color: #9da4b0;
-    font-size: 10px;
 }
 
 /* Edit mode: highlight the search box so the mode is obvious. */
@@ -87,10 +79,6 @@
 
 #ResultCommandLabel {
     font-weight: bold;
-}
-
-#ResultDescriptionLabel {
-    color: gray;
 }
 
 #NewCommandButton,

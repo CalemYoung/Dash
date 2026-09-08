@@ -1,59 +1,69 @@
 # src/settings.py
 import tomllib
 import json
+import shutil
 import sys
 from pathlib import Path
 from dataclasses import asdict, dataclass, field
-from textwrap import dedent
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
+DEFAULT_SETTINGS_PATH = PROJECT_ROOT / "config" / "settings.default.toml"
+
+with DEFAULT_SETTINGS_PATH.open("rb") as default_settings_file:
+    DEFAULT_SETTINGS = tomllib.load(default_settings_file)
 
 
 @dataclass
 class GeneralSettings:
-    hotkey: str = "alt+f"
-    show_on_screen_with_mouse: bool = False
+    hotkey: str = DEFAULT_SETTINGS["general"]["hotkey"]
+    show_on_screen_with_mouse: bool = DEFAULT_SETTINGS["general"]["show_on_screen_with_mouse"]
 
 
 @dataclass
 class UISettings:
-    program_width: int = 500
-    search_height: int = 70
-    results_height: int = 160
-    editor_height: int = 600
-    window_opacity: float = 1.0
-    search_font_size: int = 32
-    result_font_size: int = 14
-    description_font_size: int = 9
+    program_width: int = DEFAULT_SETTINGS["ui"]["program_width"]
+    search_height: int = DEFAULT_SETTINGS["ui"]["search_height"]
+    results_height: int = DEFAULT_SETTINGS["ui"]["results_height"]
+    editor_height: int = DEFAULT_SETTINGS["ui"]["editor_height"]
+    window_opacity: float = DEFAULT_SETTINGS["ui"]["window_opacity"]
+    search_font_size: int = DEFAULT_SETTINGS["ui"]["search_font_size"]
+    search_text_color: str = DEFAULT_SETTINGS["ui"]["search_text_color"]
+    result_font_size: int = DEFAULT_SETTINGS["ui"]["result_font_size"]
+    result_text_color: str = DEFAULT_SETTINGS["ui"]["result_text_color"]
+    description_font_size: int = DEFAULT_SETTINGS["ui"]["description_font_size"]
+    description_text_color: str = DEFAULT_SETTINGS["ui"]["description_text_color"]
+    clock_font_size: int = DEFAULT_SETTINGS["ui"]["clock_font_size"]
+    clock_day_text_color: str = DEFAULT_SETTINGS["ui"]["clock_day_text_color"]
+    clock_date_text_color: str = DEFAULT_SETTINGS["ui"]["clock_date_text_color"]
 
 
 @dataclass
 class SearchSettings:
-    max_results: int = 10
-    autocomplete: bool = True
-    show_descriptions: bool = True
-    show_command_tree: bool = True
+    max_results: int = DEFAULT_SETTINGS["search"]["max_results"]
+    autocomplete: bool = DEFAULT_SETTINGS["search"]["autocomplete"]
+    show_descriptions: bool = DEFAULT_SETTINGS["search"]["show_descriptions"]
+    show_command_tree: bool = DEFAULT_SETTINGS["search"]["show_command_tree"]
 
 
 @dataclass
 class ShortcutSettings:
-    edit_selected_command: str = "Ctrl+Return"
-    new_command: str = "Ctrl+N"
+    edit_selected_command: str = DEFAULT_SETTINGS["shortcuts"]["edit_selected_command"]
+    new_command: str = DEFAULT_SETTINGS["shortcuts"]["new_command"]
 
 
 @dataclass
 class PathSettings:
-    scripts_folder: str = "assets/scripts"
-    program_icon: str = "assets/icons/icon.png"
-    default_command_icon: str = "assets/icons/icon.png"
-    folder_icon: str = "assets/icons/folder.png"
-    file_icon: str = "assets/icons/file.png"
-    url_command_icon: str = "assets/icons/url.svg"
-    cache_folder: str = "assets/cache"
-    calculator_icon: str = "assets/icons/calculator.png"
-    no_result_icon: str = "assets/icons/no_result.png"
-    settings_command_icons: str = "assets/icons/settings.png"
-    quit_command_icon: str = "assets/icons/quit.png"
+    scripts_folder: str = DEFAULT_SETTINGS["paths"]["scripts_folder"]
+    program_icon: str = DEFAULT_SETTINGS["paths"]["program_icon"]
+    default_command_icon: str = DEFAULT_SETTINGS["paths"]["default_command_icon"]
+    folder_icon: str = DEFAULT_SETTINGS["paths"]["folder_icon"]
+    file_icon: str = DEFAULT_SETTINGS["paths"]["file_icon"]
+    url_command_icon: str = DEFAULT_SETTINGS["paths"]["url_command_icon"]
+    cache_folder: str = DEFAULT_SETTINGS["paths"]["cache_folder"]
+    calculator_icon: str = DEFAULT_SETTINGS["paths"]["calculator_icon"]
+    no_result_icon: str = DEFAULT_SETTINGS["paths"]["no_result_icon"]
+    settings_command_icons: str = DEFAULT_SETTINGS["paths"]["settings_command_icons"]
+    quit_command_icon: str = DEFAULT_SETTINGS["paths"]["quit_command_icon"]
 
 
 @dataclass
@@ -153,45 +163,6 @@ class Settings:
     @staticmethod
     def _create_default_file(settings_path: Path):
         """Create a default settings.toml file"""
-
-        default_content = dedent("""\
-        [general]
-        hotkey = "alt+f"
-        show_on_screen_with_mouse = false
-
-        [ui]
-        program_width = 500
-        search_height = 70
-        results_height = 160
-        editor_height = 600
-        window_opacity = 1.0
-        search_font_size = 32
-        result_font_size = 14
-        description_font_size = 9
-
-        [search]
-        max_results = 10
-        autocomplete = true
-        show_descriptions = true
-        show_command_tree = true
-
-        [shortcuts]
-        edit_selected_command = "Ctrl+Return"
-        new_command = "Ctrl+N"
-
-        [paths]
-        scripts_folder = "assets/scripts"
-        program_icon = "assets/icons/icon.png"
-        default_command_icon = "assets/icons/icon.png"
-        folder_icon = "assets/icons/folder.png"
-        file_icon = "assets/icons/file.png"
-        url_command_icon = "assets/icons/url.svg"
-        cache_folder = "assets/cache"
-        calculator_icon = "assets/icons/calculator.png"
-        no_result_icon = "assets/icons/no_result.png"
-        settings_command_icons = "assets/icons/settings.png"
-        quit_command_icon = "assets/icons/quit.png"
-        """)
-
-        settings_path.write_text(default_content)
+        settings_path.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(DEFAULT_SETTINGS_PATH, settings_path)
         print(f"Created default settings file: {settings_path}")

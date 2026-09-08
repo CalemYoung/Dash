@@ -1,5 +1,5 @@
 [general]
-hotkey = "alt+f"
+hotkey = "Alt+F"
 show_on_screen_with_mouse = false
 
 [ui]
@@ -7,13 +7,19 @@ program_width = 500
 search_height = 70
 results_height = 160
 editor_height = 600
-window_opacity = 1.0
-search_font_size = 32
+window_opacity = 0.97
+search_font_size = 24
+search_text_color = "#f3f4f7"
 result_font_size = 14
-description_font_size = 9
+result_text_color = "#e7e9ee"
+description_font_size = 10
+description_text_color = "#808080"
+clock_font_size = 10
+clock_day_text_color = "#f3f4f7"
+clock_date_text_color = "#9da4b0"
 
 [search]
-max_results = 10
+max_results = 20
 autocomplete = true
 show_descriptions = true
 show_command_tree = true
