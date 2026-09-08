@@ -1,8 +1,9 @@
-from PyQt6.QtCore import QEasingCurve, QPointF, QRectF, QSize, Qt, QTimer, QPropertyAnimation
+from PyQt6.QtCore import QEasingCurve, QPointF, QRectF, QSize, Qt, QThread, QTimer, QPropertyAnimation, QUrl
 from PyQt6.QtWidgets import QMainWindow, QLineEdit, QVBoxLayout, QHBoxLayout, QWidget, QStackedWidget, QPushButton
 from PyQt6.QtWidgets import QListWidget, QMessageBox, QSystemTrayIcon, QMenu, QApplication, QErrorMessage, QLabel, QListWidgetItem
-from PyQt6.QtWidgets import QGraphicsOpacityEffect, QFileDialog
-from PyQt6.QtGui import QBrush, QIcon, QAction, QMouseEvent, QPainter, QPen, QPixmap, QCursor, QScreen, QKeySequence, QShortcut, QColor
+from PyQt6.QtWidgets import QGraphicsOpacityEffect, QFileDialog, QProgressDialog
+from PyQt6.QtGui import QBrush, QIcon, QAction, QDesktopServices, QMouseEvent, QPainter, QPen, QPixmap, QCursor, QScreen, QKeySequence, QShortcut, QColor
+from PyQt6.QtNetwork import QNetworkAccessManager, QNetworkReply, QNetworkRequest
 from .settings import Settings
 from .settings_editor import ExportCommandsDialog, ImportCommandsDialog, ProgramImportDialog, SettingsEditorPanel
 from .icon_manager import IconManager
@@ -20,6 +21,66 @@ import datetime
 # import pygetwindow as gw
 import win32process
 import win32api
+
+
+LATEST_RELEASE_API = "https://api.github.com/repos/CalemYoung/Dash/releases/latest"
+LATEST_RELEASE_PAGE = "https://github.com/CalemYoung/Dash/releases/latest"
+
+
+def _current_version() -> str:
+    root = Path(sys._MEIPASS) if hasattr(sys, "_MEIPASS") else Path(__file__).parent.parent
+    try:
+        version = (root / "build" / "installer" / "version.txt").read_text(encoding="utf-8").strip()
+    except OSError:
+        version = ""
+    if version:
+        return version
+
+    import dash
+
+    return str(getattr(dash, "__version__", "Unknown"))
+
+
+def _version_key(value: str) -> tuple[int, ...] | None:
+    core = value.strip().lstrip("vV").split("-", 1)[0].split("+", 1)[0]
+    parts = core.split(".")
+    if not parts or any(not part.isdigit() for part in parts):
+        return None
+    return tuple(int(part) for part in parts) + (0,) * max(0, 3 - len(parts))
+
+
+def _is_newer_version(latest: str, current: str) -> bool:
+    latest_key = _version_key(latest)
+    current_key = _version_key(current)
+    if latest_key is None or current_key is None:
+        return False
+    width = max(len(latest_key), len(current_key))
+    return latest_key + (0,) * (width - len(latest_key)) > current_key + (0,) * (width - len(current_key))
+
+
+class ProgramDiscoveryThread(QThread):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.candidates: list[dict] = []
+        self.error_message = ""
+
+    def run(self):
+        pythoncom_module = None
+        try:
+            if sys.platform == "win32":
+                import pythoncom
+
+                pythoncom_module = pythoncom
+                pythoncom_module.CoInitialize()
+
+            from .installed_programs import discover_recent_program_commands
+
+            self.candidates = discover_recent_program_commands(days=365)
+        except Exception as error:
+            self.error_message = str(error)
+        finally:
+            if pythoncom_module is not None:
+                pythoncom_module.CoUninitialize()
 
 
 def _text_style(color_value: str, point_size: int | None = None) -> str:
@@ -251,6 +312,15 @@ class MainWindow(QMainWindow):
         self.cmd_manager.reprocess_command_icons(self.icon_manager)
         self.tray = None
         self._tray_retry_count = 0
+        self._update_network = QNetworkAccessManager(self)
+        self._update_reply = None
+        self._update_check_manual = False
+        self._latest_release_url = ""
+        self._latest_version = ""
+        self._check_updates_action = None
+        self._download_update_action = None
+        self._program_discovery_thread = None
+        self._program_discovery_progress = None
 
         self._setup_window()
         self._setup_widgets()
@@ -260,6 +330,7 @@ class MainWindow(QMainWindow):
 
         # Setup tray icon (with retry logic for Windows startup)
         self._setup_tray()
+        QTimer.singleShot(2500, self.check_for_updates)
 
     @staticmethod
     def _format_shortcut(shortcut):
@@ -573,6 +644,17 @@ class MainWindow(QMainWindow):
         install_location_action.triggered.connect(self.open_install_location)
         self.tray_menu.addAction(install_location_action)
 
+        self._check_updates_action = QAction("Check for Updates...", self)
+        self._check_updates_action.triggered.connect(lambda: self.check_for_updates(manual=True))
+        self.tray_menu.addAction(self._check_updates_action)
+
+        self._download_update_action = QAction(self)
+        self._download_update_action.triggered.connect(self.open_latest_release)
+        self._download_update_action.setVisible(bool(self._latest_version))
+        if self._latest_version:
+            self._download_update_action.setText(f"Download Dash {self._latest_version}...")
+        self.tray_menu.addAction(self._download_update_action)
+
         self.tray_menu.addSeparator()
 
         # About action
@@ -588,10 +670,93 @@ class MainWindow(QMainWindow):
         self.tray_menu.addAction(quit_action)
 
         tray.setContextMenu(self.tray_menu)
+        tray.messageClicked.connect(self.open_latest_release)
 
         # Left click - show Dash
         tray.activated.connect(lambda reason: self.activate_launcher() if reason == QSystemTrayIcon.ActivationReason.Trigger else None)
         return tray
+
+    def check_for_updates(self, manual: bool = False):
+        if self._update_reply is not None:
+            return
+
+        self._update_check_manual = manual
+        if self._check_updates_action is not None:
+            self._check_updates_action.setEnabled(False)
+            self._check_updates_action.setText("Checking for Updates...")
+
+        request = QNetworkRequest(QUrl(LATEST_RELEASE_API))
+        request.setRawHeader(b"Accept", b"application/vnd.github+json")
+        request.setRawHeader(b"X-GitHub-Api-Version", b"2022-11-28")
+        request.setRawHeader(b"User-Agent", b"Dash-Update-Checker")
+        request.setTransferTimeout(10000)
+        self._update_reply = self._update_network.get(request)
+        self._update_reply.finished.connect(self._on_update_check_finished)
+
+    def _on_update_check_finished(self):
+        import json
+
+        reply = self._update_reply
+        if reply is None:
+            return
+        self._update_reply = None
+        manual = self._update_check_manual
+        self._update_check_manual = False
+
+        if self._check_updates_action is not None:
+            self._check_updates_action.setEnabled(True)
+            self._check_updates_action.setText("Check for Updates...")
+
+        try:
+            if reply.error() != QNetworkReply.NetworkError.NoError:
+                raise RuntimeError(reply.errorString())
+            release = json.loads(bytes(reply.readAll()).decode("utf-8"))
+            latest_tag = str(release.get("tag_name", "")).strip()
+            release_url = str(release.get("html_url", "")).strip()
+            current_version = _current_version()
+            if not latest_tag or not release_url:
+                raise ValueError("GitHub returned incomplete release information")
+        except (RuntimeError, ValueError, UnicodeDecodeError, json.JSONDecodeError) as error:
+            if manual:
+                QMessageBox.warning(self, "Check for Updates", f"Dash could not check for updates.\n\n{error}")
+            reply.deleteLater()
+            return
+
+        reply.deleteLater()
+        latest_version = latest_tag.lstrip("vV")
+        if _is_newer_version(latest_tag, current_version):
+            self._latest_version = latest_version
+            self._latest_release_url = release_url
+            if self._download_update_action is not None:
+                self._download_update_action.setText(f"Download Dash {latest_version}...")
+                self._download_update_action.setVisible(True)
+
+            if manual:
+                self._show_update_available(latest_version)
+            elif self.tray is not None:
+                self.tray.showMessage(
+                    "Dash Update Available",
+                    f"Dash {latest_version} is available. Click to open the release.",
+                    QSystemTrayIcon.MessageIcon.Information,
+                    10000,
+                )
+        elif manual:
+            QMessageBox.information(self, "Check for Updates", f"Dash {current_version} is up to date.")
+
+    def _show_update_available(self, latest_version: str):
+        message_box = QMessageBox(self)
+        message_box.setWindowTitle("Dash Update Available")
+        message_box.setIcon(QMessageBox.Icon.Information)
+        message_box.setText(f"Dash {latest_version} is available.")
+        message_box.setInformativeText("Open the GitHub release to download the installer?")
+        open_button = message_box.addButton("Open Release", QMessageBox.ButtonRole.AcceptRole)
+        message_box.addButton(QMessageBox.StandardButton.Cancel)
+        message_box.exec()
+        if message_box.clickedButton() is open_button:
+            self.open_latest_release()
+
+    def open_latest_release(self):
+        QDesktopServices.openUrl(QUrl(self._latest_release_url or LATEST_RELEASE_PAGE))
 
     def open_settings_file(self):
         """Open the in-app settings editor."""
@@ -817,9 +982,48 @@ class MainWindow(QMainWindow):
         self.choose_recent_programs()
 
     def choose_recent_programs(self):
-        from .installed_programs import discover_recent_program_commands, filter_new_program_commands
+        if self._program_discovery_thread is not None:
+            return
 
-        candidates = discover_recent_program_commands(days=365)
+        progress = QProgressDialog(self)
+        progress.setWindowTitle("Auto-Populate Commands")
+        progress.setLabelText("Scanning installed programs...")
+        progress.setRange(0, 0)
+        progress.setCancelButton(None)
+        progress.setMinimumDuration(0)
+        progress.setWindowModality(Qt.WindowModality.WindowModal)
+
+        thread = ProgramDiscoveryThread(self)
+        thread.finished.connect(self._on_program_discovery_finished)
+        self._program_discovery_progress = progress
+        self._program_discovery_thread = thread
+        progress.show()
+        thread.start()
+
+    def _on_program_discovery_finished(self):
+        thread = self._program_discovery_thread
+        if thread is None:
+            return
+        self._program_discovery_thread = None
+
+        progress = self._program_discovery_progress
+        self._program_discovery_progress = None
+        if progress is not None:
+            progress.close()
+            progress.deleteLater()
+
+        candidates = thread.candidates
+        error_message = thread.error_message
+        thread.deleteLater()
+        if error_message:
+            self.display_error_popup(f"Could not scan installed programs: {error_message}")
+            return
+
+        self._show_program_import_dialog(candidates)
+
+    def _show_program_import_dialog(self, candidates: list[dict]):
+        from .installed_programs import filter_new_program_commands
+
         existing_locations = self.cmd_manager.existing_command_locations()
         candidates = filter_new_program_commands(candidates, existing_locations)
         dialog = ProgramImportDialog(candidates, existing_locations, self.icon_manager, self)
@@ -1021,8 +1225,7 @@ class MainWindow(QMainWindow):
 
     def show_about(self):
         """Show about dialog"""
-        import dash  # imported lazily to avoid circular import with src package
-        version = getattr(dash, "__version__", "Unknown")
+        version = _current_version()
 
         about_box = QMessageBox()
         about_box.setWindowTitle("About Dash")

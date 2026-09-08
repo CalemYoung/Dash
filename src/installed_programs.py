@@ -95,11 +95,19 @@ def discover_recent_program_commands(days: int = 365, max_commands: int | None =
     seen_locations: set[str] = set()
     seen_names: set[str] = set()
 
-    for shortcut_path in _start_menu_shortcuts():
-        target_path = _shortcut_target(shortcut_path)
-        _add_program_command(
-            commands, seen_locations, seen_names, _command_name(shortcut_path.stem), target_path, from_registry=False
-        )
+    try:
+        import win32com.client
+
+        shortcut_shell = win32com.client.Dispatch("WScript.Shell")
+    except Exception:
+        shortcut_shell = None
+
+    if shortcut_shell is not None:
+        for shortcut_path in _start_menu_shortcuts():
+            target_path = _shortcut_target(shortcut_path, shortcut_shell)
+            _add_program_command(
+                commands, seen_locations, seen_names, _command_name(shortcut_path.stem), target_path, from_registry=False
+            )
 
     for exe_name, target_path in _app_paths_registry_targets():
         _add_program_command(
@@ -164,11 +172,8 @@ def _start_menu_shortcuts() -> list[Path]:
     return sorted(shortcuts, key=lambda path: str(path).casefold())
 
 
-def _shortcut_target(shortcut_path: Path) -> Path | None:
+def _shortcut_target(shortcut_path: Path, shell) -> Path | None:
     try:
-        import win32com.client
-
-        shell = win32com.client.Dispatch("WScript.Shell")
         shortcut = shell.CreateShortcut(str(shortcut_path))
         target = str(shortcut.TargetPath or "").strip()
     except Exception:

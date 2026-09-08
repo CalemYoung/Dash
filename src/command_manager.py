@@ -8,7 +8,6 @@ import subprocess
 from urllib.parse import urlparse
 from .settings import Settings
 from .calculator import eval_expression
-from PyQt6.QtWidgets import QApplication
 import pyperclip
 from .installed_programs import discover_recent_program_commands
 
@@ -55,14 +54,6 @@ class CommandManager:
                 "icon": self.settings.paths.settings_command_icons,
                 "type": "system",
                 "action": "open_settings",
-            },
-            {
-                "name": "Dash Quit",
-                "aliases": ["quit", "exit"],
-                "description": "Quit Dash",
-                "icon": self.settings.paths.quit_command_icon,
-                "type": "system",
-                "action": "quit",
             },
         ]
 
@@ -524,10 +515,6 @@ class CommandManager:
             main_window.open_settings_file()
         elif action == "open_commands":
             main_window.open_commands_file()
-        elif action == "quit":
-            app = QApplication.instance()
-            if app:
-                app.quit()
 
     def _run_script(self, script_path: str):
         """Execute a Python script"""
