@@ -1,0 +1,1099 @@
+from PyQt6.QtCore import QEasingCurve, QPointF, QRectF, QSize, Qt, QTimer, QPropertyAnimation
+from PyQt6.QtWidgets import QMainWindow, QLineEdit, QVBoxLayout, QHBoxLayout, QWidget, QStackedWidget, QPushButton
+from PyQt6.QtWidgets import QListWidget, QMessageBox, QSystemTrayIcon, QMenu, QApplication, QErrorMessage, QLabel, QListWidgetItem
+from PyQt6.QtWidgets import QGraphicsOpacityEffect, QFileDialog
+from PyQt6.QtGui import QBrush, QIcon, QAction, QMouseEvent, QPainter, QPen, QPixmap, QCursor, QScreen, QKeySequence, QShortcut, QColor
+from .settings import Settings
+from .settings_editor import ExportCommandsDialog, ImportCommandsDialog, ProgramImportDialog, SettingsEditorPanel
+from .icon_manager import IconManager
+from .command_trie import TrieSnapshot
+from typing import cast
+from .calculator import eval_expression
+from .icon_browser import glyph_pixmap, OutlineIcon
+import os
+import sys
+from pathlib import Path
+import win32gui
+import win32con
+import datetime
+
+# import pygetwindow as gw
+import win32process
+import win32api
+
+
+class SearchTreeWidget(QWidget):
+    def __init__(self, scale: float, parent=None):
+        super().__init__(parent)
+        self.setObjectName("SearchTree")
+        self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+        self._snapshot: TrieSnapshot | None = None
+        self._scale = scale
+        self.set_scale(scale)
+
+        self._opacity_effect = QGraphicsOpacityEffect(self)
+        self._opacity_effect.setOpacity(1.0)
+        self.setGraphicsEffect(self._opacity_effect)
+        self._flash_animation = QPropertyAnimation(self._opacity_effect, b"opacity", self)
+        self._flash_animation.setDuration(150)
+        self._flash_animation.setEasingCurve(QEasingCurve.Type.OutCubic)
+
+    def set_scale(self, scale: float):
+        self._scale = scale
+        self.update()
+
+    def branch_capacity(self) -> int:
+        scale = self._scale
+        padding = max(12, round(14 * scale))
+        row_step = max(20, round(22 * scale))
+        branch_top = round(55 * scale) + row_step * 2
+        return max(0, (self.height() - padding - branch_top) // row_step + 1)
+
+    def set_snapshot(self, snapshot: TrieSnapshot):
+        was_hidden = self.isHidden()
+        self._snapshot = snapshot
+        self.show()
+        self.update()
+
+        self._flash_animation.stop()
+        self._flash_animation.setStartValue(0.58 if was_hidden else 0.82)
+        self._flash_animation.setEndValue(1.0)
+        self._flash_animation.start()
+
+    def clear_snapshot(self):
+        self._flash_animation.stop()
+        self._opacity_effect.setOpacity(1.0)
+        self._snapshot = None
+        self.hide()
+
+    def paintEvent(self, event):
+        super().paintEvent(event)
+        if self._snapshot is None:
+            return
+
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+
+        scale = self._scale
+        width = self.width()
+        padding = max(12, round(14 * scale))
+        accent = QColor("#5b9cff")
+        text = QColor("#e7e9ee")
+        muted = QColor("#7d8490")
+        line = QColor("#464d59")
+        error = QColor("#ff776d")
+        terminal = QColor("#e3b341")
+
+        header_font = painter.font()
+        header_font.setPixelSize(max(9, round(10 * scale)))
+        header_font.setBold(True)
+        painter.setFont(header_font)
+        painter.setPen(muted)
+        painter.drawText(
+            QRectF(padding, round(8 * scale), width - padding * 2, round(18 * scale)),
+            Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
+            "COMMAND TREE",
+        )
+
+        body_font = painter.font()
+        body_font.setPixelSize(max(9, round(10 * scale)))
+        body_font.setBold(False)
+        value_font = painter.font()
+        value_font.setPixelSize(max(9, round(10 * scale)))
+        value_font.setBold(True)
+        detail_font = painter.font()
+        detail_font.setPixelSize(max(8, round(9 * scale)))
+        detail_font.setBold(False)
+
+        snapshot = self._snapshot
+        row_step = max(20, round(22 * scale))
+        root_y = round(55 * scale)
+        active_y = root_y + row_step
+        root_x = round(20 * scale)
+        active_x = root_x + round(18 * scale)
+        branch_x = active_x + round(18 * scale)
+        node_radius = max(3, round(4 * scale))
+        leaf_radius = max(2, round(3 * scale))
+        count_width = round(28 * scale)
+        label_right = width - padding - count_width
+
+        branch_top = active_y + row_step
+        branch_capacity = self.branch_capacity()
+        show_more = snapshot.branch_count > branch_capacity
+        visible_branch_count = min(snapshot.branch_count, max(0, branch_capacity - int(show_more)))
+        visible_branches = snapshot.branches[:visible_branch_count]
+        branch_row_count = len(visible_branches) + int(show_more and branch_capacity > 0)
+
+        connector_pen = QPen(line, max(1.0, scale))
+        connector_pen.setCapStyle(Qt.PenCapStyle.SquareCap)
+        painter.setPen(connector_pen)
+        painter.drawLine(QPointF(root_x, root_y + node_radius), QPointF(root_x, active_y))
+        painter.drawLine(QPointF(root_x, active_y), QPointF(active_x - node_radius, active_y))
+
+        if branch_row_count:
+            last_branch_y = branch_top + (branch_row_count - 1) * row_step
+            painter.drawLine(QPointF(active_x, active_y + node_radius), QPointF(active_x, last_branch_y))
+            for index in range(branch_row_count):
+                branch_y = branch_top + index * row_step
+                painter.drawLine(QPointF(active_x, branch_y), QPointF(branch_x - leaf_radius, branch_y))
+
+        painter.setPen(QPen(QColor("#69717e"), max(1.0, 1.2 * scale)))
+        painter.setBrush(QBrush(QColor("#303640")))
+        painter.drawEllipse(QPointF(root_x, root_y), node_radius, node_radius)
+        painter.setFont(body_font)
+        painter.setPen(muted)
+        painter.drawText(
+            QRectF(root_x + round(11 * scale), root_y - round(8 * scale), label_right - root_x, round(16 * scale)),
+            Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
+            "ALL COMMANDS",
+        )
+        painter.setFont(value_font)
+        painter.drawText(
+            QRectF(label_right, root_y - round(8 * scale), count_width, round(16 * scale)),
+            Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter,
+            str(snapshot.total_command_count),
+        )
+
+        if snapshot.command_count == 0:
+            active_color = error
+            active_fill = QColor("#57363a")
+        elif snapshot.is_terminal:
+            active_color = terminal
+            active_fill = QColor("#554922")
+        else:
+            active_color = accent
+            active_fill = QColor("#293c57")
+
+        painter.setPen(QPen(active_color, max(1.0, 1.2 * scale)))
+        painter.setBrush(QBrush(active_fill))
+        painter.drawEllipse(QPointF(active_x, active_y), node_radius, node_radius)
+        painter.setFont(value_font)
+        painter.setPen(active_color)
+        active_label = painter.fontMetrics().elidedText(
+            snapshot.prefix.upper(),
+            Qt.TextElideMode.ElideRight,
+            max(0, int(label_right - active_x - round(11 * scale))),
+        )
+        painter.drawText(
+            QRectF(active_x + round(11 * scale), active_y - round(8 * scale), label_right - active_x, round(16 * scale)),
+            Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
+            active_label,
+        )
+        painter.drawText(
+            QRectF(label_right, active_y - round(8 * scale), count_width, round(16 * scale)),
+            Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter,
+            str(snapshot.command_count),
+        )
+
+        for index, branch in enumerate(visible_branches):
+            branch_y = branch_top + index * row_step
+            painter.setPen(QPen(accent, max(1.0, scale)))
+            painter.setBrush(QBrush(QColor("#293c57")))
+            painter.drawEllipse(QPointF(branch_x, branch_y), leaf_radius, leaf_radius)
+            painter.setFont(body_font)
+            painter.setPen(text)
+            branch_label = painter.fontMetrics().elidedText(
+                branch.prefix.upper(),
+                Qt.TextElideMode.ElideRight,
+                max(0, int(label_right - branch_x - round(10 * scale))),
+            )
+            painter.drawText(
+                QRectF(branch_x + round(10 * scale), branch_y - round(8 * scale), label_right - branch_x, round(16 * scale)),
+                Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
+                branch_label,
+            )
+            painter.setFont(value_font)
+            painter.setPen(accent)
+            painter.drawText(
+                QRectF(label_right, branch_y - round(8 * scale), count_width, round(16 * scale)),
+                Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter,
+                str(branch.command_count),
+            )
+
+        if show_more and branch_capacity > 0:
+            summary_y = branch_top + len(visible_branches) * row_step
+            painter.setPen(QPen(muted, max(1.0, scale)))
+            painter.setBrush(QBrush(QColor("#303640")))
+            painter.drawEllipse(QPointF(branch_x, summary_y), leaf_radius, leaf_radius)
+            painter.setFont(detail_font)
+            painter.setPen(muted)
+            painter.drawText(
+                QRectF(branch_x + round(10 * scale), summary_y - round(8 * scale), width - branch_x - padding, round(16 * scale)),
+                Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
+                "...",
+            )
+
+        painter.end()
+
+
+class MainWindow(QMainWindow):
+    def __init__(self, cmd_manager, settings: Settings, settings_path: Path | None = None):
+        super().__init__()
+        self.cmd_manager = cmd_manager
+        self.settings = settings
+        self._loaded_settings_path = settings_path
+        self.user_text = ""
+        self.current_suggestion = ""
+        self.is_deleting = False
+        self._editor_panel = None
+        self._hotkey_listener = None
+        self.icon_manager = IconManager(settings)
+        self.cmd_manager.reprocess_command_icons(self.icon_manager)
+        self.tray = None
+        self._tray_retry_count = 0
+
+        self._setup_window()
+        self._setup_widgets()
+        self._setup_layout()
+        self._setup_shortcuts()
+        self.hide_launcher()
+
+        # Setup tray icon (with retry logic for Windows startup)
+        self._setup_tray()
+
+    @staticmethod
+    def _format_shortcut(shortcut):
+        names = {
+            "alt": "Alt",
+            "ctrl": "Ctrl",
+            "control": "Ctrl",
+            "shift": "Shift",
+            "win": "Win",
+            "cmd": "Cmd",
+            "return": "Enter",
+            "enter": "Enter",
+            "space": "Space",
+        }
+        return " + ".join(names.get(part.strip().lower(), part.strip().upper()) for part in shortcut.split("+"))
+
+    def _shortcut_hint_text(self):
+        return "  |  ".join(
+            (
+                f"New: {self._format_shortcut(self.settings.shortcuts.new_command)}",
+                f"Edit: {self._format_shortcut(self.settings.shortcuts.edit_selected_command)}",
+            )
+        )
+
+    def _setup_window(self):
+        self.setWindowTitle("Dash")
+        self.setWindowIcon(QIcon(self.settings.paths.default_command_icon))
+        self.setWindowFlags(Qt.WindowType.FramelessWindowHint | Qt.WindowType.WindowStaysOnTopHint)
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
+        self.setWindowOpacity(self.settings.ui.window_opacity)
+
+    def _setup_widgets(self):
+        # 1: Create main widget
+        self.central_widget = QWidget()
+        self.central_widget.setObjectName("MainWidget")
+        self._layout_scale = max(0.8, min(1.4, self.settings.ui.program_width / 500))
+        self._layout_margin = max(10, round(10 * self._layout_scale))
+        self._layout_spacing = max(10, round(10 * self._layout_scale))
+
+        # 2.1: Create overall search box container widget -> contains text input + multiline info widgets
+        self.search_container_widget = QWidget()
+        self.search_container_widget.setFixedSize(QSize(self.settings.ui.program_width, self.settings.ui.search_height))
+
+        # 2.2: Create search box input widget for user searching
+        self.search_input_widget = QLineEdit()
+        self.search_input_widget.setObjectName("SearchInput")
+        self.search_input_widget.setPlaceholderText("Type a command...")
+        font = self.search_input_widget.font()
+        font.setPointSize(self.settings.ui.search_font_size)
+        self.search_input_widget.setFont(font)
+        self.search_input_widget.installEventFilter(self)
+        self.search_input_widget.textChanged.connect(self.on_text_change)
+        self.search_input_widget.returnPressed.connect(self.on_enter_pressed)
+
+        # 2.3: Create search box info widget for date and time
+        self.date_info_widget = QWidget()
+        self.date_info_widget.setObjectName("SearchMeta")
+        self.date_info_widget.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+        self.date_info_widget.setFixedWidth(max(88, round(88 * self._layout_scale)))
+        self.date_info_day_label = QLabel()
+        self.date_info_day_label.setObjectName("SearchMetaDay")
+        self.date_info_date_label = QLabel()
+        self.date_info_date_label.setObjectName("SearchMetaDate")
+        self.date_info_day_label.setFixedHeight(18)
+        self.date_info_date_label.setFixedHeight(18)
+        self.date_info_day_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.date_info_date_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+
+        # 3: Create results widget
+        self.results_list_widget = QListWidget()
+        self.results_list_widget.setObjectName("ResultsList")
+        self.results_list_widget.setFixedSize(QSize(self.settings.ui.program_width, self.settings.ui.results_height))
+        self.results_list_widget.hide()
+        self.search_tree_widget = SearchTreeWidget(self._layout_scale)
+        self.search_tree_widget.setFixedSize(
+            self._search_tree_width(),
+            self.settings.ui.search_height + self.settings.ui.results_height,
+        )
+        self.search_tree_widget.hide()
+        self.shortcut_hint_label = QLabel(self._shortcut_hint_text())
+        self.shortcut_hint_label.setObjectName("ShortcutHint")
+        self.shortcut_hint_label.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+        self.footer_height = max(24, round(24 * self._layout_scale))
+        self._search_view_size = QSize(
+            self.settings.ui.program_width,
+            self.settings.ui.search_height + self.footer_height,
+        )
+
+    def _setup_layout(self):
+        date_info_layout = QVBoxLayout()
+        date_info_layout.setContentsMargins(0, 0, 0, 0)
+        date_info_layout.setSpacing(0)
+        date_info_layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        date_info_layout.addWidget(self.date_info_day_label)
+        date_info_layout.addWidget(self.date_info_date_label)
+        self.date_info_widget.setLayout(date_info_layout)
+
+        search_container_layout = QHBoxLayout()
+        search_container_layout.addWidget(self.search_input_widget, 1)
+        search_container_layout.addWidget(self.date_info_widget)
+        search_container_layout.setContentsMargins(self._layout_margin, 0, self._layout_margin, 0)
+        search_container_layout.setSpacing(self._layout_spacing)
+        self.search_container_widget.setLayout(search_container_layout)
+        self.search_container_widget.setObjectName("SearchContainer")
+
+        search_results_layout = QVBoxLayout()
+        search_results_layout.setContentsMargins(0, 0, 0, 0)
+        search_results_layout.setSpacing(0)
+        search_results_layout.addWidget(self.search_container_widget)
+        search_results_layout.addWidget(self.results_list_widget)
+
+        launcher_body_layout = QHBoxLayout()
+        launcher_body_layout.setContentsMargins(0, 0, 0, 0)
+        launcher_body_layout.setSpacing(0)
+        launcher_body_layout.addLayout(search_results_layout)
+        launcher_body_layout.addWidget(self.search_tree_widget)
+
+        footer_layout = QHBoxLayout()
+        footer_layout.setContentsMargins(self._layout_margin, 0, self._layout_margin, 0)
+        footer_layout.setSpacing(self._layout_spacing)
+        footer_layout.addWidget(self.shortcut_hint_label, 1)
+        self.footer_widget = QWidget()
+        self.footer_widget.setObjectName("LauncherFooter")
+        self.footer_widget.setFixedHeight(self.footer_height)
+        self.footer_widget.setLayout(footer_layout)
+
+        main_layout = QVBoxLayout()
+        main_layout.setContentsMargins(0, 0, 0, 0)
+        main_layout.setSpacing(0)
+        main_layout.addLayout(launcher_body_layout)
+        main_layout.addWidget(self.footer_widget)
+
+        self.central_widget.setLayout(main_layout)
+        self.central_widget.setFixedSize(self._search_view_size)
+
+        # A stack lets us swap the search view for the full-panel command editor.
+        self.view_stack = QStackedWidget()
+        self.view_stack.addWidget(self.central_widget)
+        self.setCentralWidget(self.view_stack)
+
+    def _search_tree_width(self):
+        return max(240, min(300, round(self.settings.ui.program_width * 0.56)))
+
+    def _sync_search_view_size(self):
+        tree_width = 0 if self.search_tree_widget.isHidden() else self.search_tree_widget.width()
+        results_height = 0 if self.results_list_widget.isHidden() else self.settings.ui.results_height
+        self._search_view_size = QSize(
+            self.settings.ui.program_width + tree_width,
+            self.settings.ui.search_height + results_height + self.footer_height,
+        )
+        self.central_widget.setFixedSize(self._search_view_size)
+        if hasattr(self, "view_stack") and self.view_stack.currentWidget() is self.central_widget:
+            self.setFixedSize(self._search_view_size)
+
+    def _update_search_tree(self, prefix: str):
+        tree_visible = self.settings.search.show_command_tree and bool(prefix)
+        if tree_visible:
+            self.search_tree_widget.set_snapshot(
+                self.cmd_manager.lookup_trie.snapshot(
+                    prefix,
+                    max_branches=self.search_tree_widget.branch_capacity(),
+                )
+            )
+        else:
+            self.search_tree_widget.clear_snapshot()
+        for widget in (self.search_container_widget, self.results_list_widget):
+            widget.setProperty("treeVisible", tree_visible)
+            style = widget.style()
+            if style is not None:
+                style.unpolish(widget)
+                style.polish(widget)
+        self._sync_search_view_size()
+
+    def _setup_shortcuts(self):
+        self.edit_shortcut = QShortcut(QKeySequence(self.settings.shortcuts.edit_selected_command), self.central_widget)
+        self.edit_shortcut.setContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
+        self.edit_shortcut.activated.connect(self.open_selected_command_editor)
+
+        self.new_command_shortcut = QShortcut(QKeySequence(self.settings.shortcuts.new_command), self.central_widget)
+        self.new_command_shortcut.setContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
+        self.new_command_shortcut.activated.connect(self.open_new_command)
+
+    def eventFilter(self, obj, event):
+        """Catch key presses on the input box"""
+        if obj == self.search_input_widget and event.type() == event.Type.KeyPress:
+            # Check if user is deleting
+            if event.key() in (Qt.Key.Key_Backspace, Qt.Key.Key_Delete):
+                self.is_deleting = True
+            else:
+                self.is_deleting = False
+        return super().eventFilter(obj, event)
+
+    def hide_launcher(self):
+        if self._editor_panel is not None:
+            self.close_editor()
+        self.hide()
+        self.search_input_widget.clear()
+        self.user_text = ""
+
+    def activate_launcher(self):
+        was_visible = self.isVisible()
+        todays_date = datetime.datetime.now()
+        self.date_info_day_label.setText(todays_date.strftime("%A"))
+        self.date_info_date_label.setText(todays_date.strftime("%d %B"))
+
+        self.adjustSize()
+        if self.settings.general.show_on_screen_with_mouse:
+            self._move_to_mouse_screen()
+        self.show()
+        if was_visible:
+            self.raise_()
+            self.activateWindow()
+            QTimer.singleShot(100, self._force_focus)
+
+    def _force_focus(self):
+        """Force focus on the window with proper Windows API handling"""
+        try:
+            hwnd = self.winId().__int__()
+
+            # Get the current foreground window
+            current_foreground = win32gui.GetForegroundWindow()
+
+            # Get the thread ID of the current foreground window
+            current_thread = win32process.GetWindowThreadProcessId(current_foreground)[0] if current_foreground else 0
+            # Get our thread ID
+            our_thread = win32api.GetCurrentThreadId()
+
+            # Attach to the foreground thread to bypass SetForegroundWindow restrictions
+            if current_thread != our_thread:
+                win32process.AttachThreadInput(current_thread, our_thread, True)
+
+            # Show and restore the window
+            win32gui.ShowWindow(hwnd, win32con.SW_RESTORE)
+            win32gui.SetWindowPos(hwnd, win32con.HWND_TOPMOST, 0, 0, 0, 0, win32con.SWP_NOMOVE | win32con.SWP_NOSIZE)
+            win32gui.SetWindowPos(hwnd, win32con.HWND_NOTOPMOST, 0, 0, 0, 0, win32con.SWP_NOMOVE | win32con.SWP_NOSIZE)
+
+            # Set focus
+            win32gui.SetForegroundWindow(hwnd)
+            win32gui.SetFocus(hwnd)
+
+            # Detach thread input
+            if current_thread != our_thread:
+                win32process.AttachThreadInput(current_thread, our_thread, False)
+
+        except Exception as e:
+            print(f"Warning: Could not force focus: {e}")
+            # Fallback to Qt methods
+            self.raise_()
+            self.activateWindow()
+            self.search_input_widget.setFocus()
+
+    def _move_to_mouse_screen(self):
+        cursor_pos = QCursor.pos()
+        screen = QApplication.screenAt(cursor_pos)
+        if screen is None:
+            screen = QApplication.primaryScreen()
+
+        screen = cast(QScreen, screen)  # silence the type checker
+
+        screen_geom = screen.availableGeometry() if hasattr(screen, "availableGeometry") else screen.geometry()
+        win_geom = self.frameGeometry()
+
+        x = screen_geom.center().x() - win_geom.width() // 2
+        y = screen_geom.center().y() - win_geom.height() // 2
+
+        self.move(x, y)
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        self.raise_()
+        self.activateWindow()
+        QTimer.singleShot(100, self._force_focus)
+
+    def _setup_tray(self):
+        """Setup system tray with retry logic for Windows startup"""
+        self.tray = self.setup_tray_icon()
+
+        # Verify tray icon is visible, retry if not (up to 5 times)
+        if not self.tray.isVisible() and self._tray_retry_count < 20:
+            self._tray_retry_count += 1
+            print(f"Tray icon not visible, retrying... ({self._tray_retry_count}/5)")
+            QTimer.singleShot(3000, self._setup_tray)
+
+    def setup_tray_icon(self):
+        """Create and configure system tray icon with menu"""
+        tray = QSystemTrayIcon()
+        tray.setIcon(QIcon(self.settings.paths.program_icon))
+        tray.setVisible(True)
+
+        # Create context menu (right-click) - store as instance variable
+        self.tray_menu = QMenu()
+
+        # Keep the tray menu focused on app-level actions; feature workflows are
+        # available from the launcher and settings editor.
+        install_location_action = QAction("Open Install Location", self)
+        install_location_action.triggered.connect(self.open_install_location)
+        self.tray_menu.addAction(install_location_action)
+
+        self.tray_menu.addSeparator()
+
+        # About action
+        about_action = QAction("About", self)
+        about_action.triggered.connect(self.show_about)
+        self.tray_menu.addAction(about_action)
+
+        # Quit action
+        quit_action = QAction(QIcon("assets/icons/quit.png"), "Quit", self)
+        app = QApplication.instance()
+        assert app is not None
+        quit_action.triggered.connect(app.quit)
+        self.tray_menu.addAction(quit_action)
+
+        tray.setContextMenu(self.tray_menu)
+
+        # Left click - show Dash
+        tray.activated.connect(lambda reason: self.activate_launcher() if reason == QSystemTrayIcon.ActivationReason.Trigger else None)
+        return tray
+
+    def open_settings_file(self):
+        """Open the in-app settings editor."""
+        self.open_settings_editor()
+
+    def set_hotkey_listener(self, listener):
+        self._hotkey_listener = listener
+
+    def _settings_path(self):
+        if self._loaded_settings_path is not None:
+            return self._loaded_settings_path
+        if hasattr(sys, "_MEIPASS"):
+            # Installed - settings in AppData
+            app_data = Path(os.environ.get("APPDATA", "")) / "Dash"
+            return app_data / "config" / "settings.toml"
+        else:
+            # Development - settings in project folder
+            return Path(__file__).parent.parent / "config" / "settings.toml"
+
+    def open_settings_editor(self):
+        settings_path = self._settings_path()
+        previous_center = self.frameGeometry().center()
+        self._editor_return_center = previous_center
+        panel = SettingsEditorPanel(self.settings, settings_path, self)
+        panel.closed.connect(self.close_editor)
+        panel.saved.connect(self._apply_settings)
+        panel.importProgramsRequested.connect(self.choose_recent_programs)
+        panel.exportCommandsRequested.connect(self.export_commands)
+        panel.importCommandsRequested.connect(self.import_commands)
+        self._editor_panel = panel
+        self.view_stack.addWidget(panel)
+        self.view_stack.setCurrentWidget(panel)
+        self._pre_editor_size = self.size()
+        available_geometry = self.screen().availableGeometry()
+        editor_width = min(max(760, self.settings.ui.program_width), available_geometry.width() - 32)
+        editor_height = min(max(720, self.settings.ui.editor_height), available_geometry.height() - 32)
+        self.setFixedSize(editor_width, editor_height)
+        editor_geometry = self.frameGeometry()
+        editor_geometry.moveCenter(previous_center)
+        self.move(editor_geometry.topLeft())
+        panel.setFocus()
+
+    def _apply_settings(self, settings):
+        self.settings = settings
+        self.setWindowOpacity(settings.ui.window_opacity)
+        self.icon_manager.settings = settings
+        if self._hotkey_listener is not None:
+            self._hotkey_listener.update_hotkey(settings.general.hotkey)
+        self.edit_shortcut.setKey(QKeySequence(settings.shortcuts.edit_selected_command))
+        self.new_command_shortcut.setKey(QKeySequence(settings.shortcuts.new_command))
+        search_font = self.search_input_widget.font()
+        search_font.setPointSize(settings.ui.search_font_size)
+        self.search_input_widget.setFont(search_font)
+        self._layout_scale = max(0.8, min(1.4, settings.ui.program_width / 500))
+        self._layout_margin = max(10, round(10 * self._layout_scale))
+        self._layout_spacing = max(10, round(10 * self._layout_scale))
+        self.date_info_widget.setFixedWidth(max(88, round(88 * self._layout_scale)))
+        self.footer_height = max(24, round(24 * self._layout_scale))
+        self.footer_widget.setFixedHeight(self.footer_height)
+        search_layout = self.search_container_widget.layout()
+        search_layout.setContentsMargins(self._layout_margin, 0, self._layout_margin, 0)
+        search_layout.setSpacing(self._layout_spacing)
+        footer_layout = self.footer_widget.layout()
+        footer_layout.setContentsMargins(self._layout_margin, 0, self._layout_margin, 0)
+        footer_layout.setSpacing(self._layout_spacing)
+        self.search_container_widget.setFixedSize(QSize(settings.ui.program_width, settings.ui.search_height))
+        self.results_list_widget.setFixedSize(QSize(settings.ui.program_width, settings.ui.results_height))
+        self.search_tree_widget.set_scale(self._layout_scale)
+        self.search_tree_widget.setFixedSize(
+            self._search_tree_width(),
+            settings.ui.search_height + settings.ui.results_height,
+        )
+        if self.user_text:
+            self._update_search_tree(self.user_text)
+        else:
+            self._update_search_tree("")
+            self._clear_and_hide_results()
+        self.shortcut_hint_label.setText(self._shortcut_hint_text())
+
+    def open_commands_file(self):
+        """Open commands.toml in default text editor"""
+        if hasattr(sys, "_MEIPASS"):
+            # Installed - commands in AppData
+            app_data = Path(os.environ.get("APPDATA", "")) / "Dash"
+            commands_path = app_data / "config" / "commands.toml"
+        else:
+            # Development - commands in project folder
+            commands_path = Path(__file__).parent.parent / "config" / "commands.toml"
+
+        if commands_path.exists():
+            os.startfile(commands_path)
+        else:
+            self.display_error_popup(f"commands.toml not found at {commands_path}")
+
+    def open_icons_folder(self):
+        """Open icons folder in file explorer"""
+        if hasattr(sys, "_MEIPASS"):
+            # Installed - icons in install directory alongside exe
+            icons_path = Path(sys.executable).parent / "assets" / "icons"
+        else:
+            # Development - icons in project folder
+            icons_path = Path(__file__).parent.parent / "assets" / "icons"
+
+        if icons_path.exists():
+            os.startfile(icons_path)
+        else:
+            self.display_error_popup(f"Icons folder not found at {icons_path}")
+
+    def open_install_location(self):
+        """Open the directory containing the installed executable."""
+        install_path = Path(sys.executable).parent if hasattr(sys, "_MEIPASS") else Path(__file__).parent.parent
+
+        if install_path.exists():
+            os.startfile(install_path)
+        else:
+            self.display_error_popup(f"Install location not found at {install_path}")
+
+    def display_error_popup(self, text):
+        error_dialog = QErrorMessage(self)
+        error_dialog.showMessage(text)
+        error_dialog.exec()
+
+    def on_text_change(self, text):
+        # Early exit conditions
+        if self.is_deleting or not self.settings.search.autocomplete:
+            self._update_without_suggestion(text)
+            return
+
+        # Extract the actual user input (not including selected suggestion)
+        self.user_text = self._extract_user_input(text)
+
+        if not self.user_text:
+            self._update_without_suggestion("")
+            return
+
+        self._update_search_tree(self.user_text)
+
+        # Get matching results
+        results = self.cmd_manager.get_matching_commands(self, self.user_text)
+
+        # Apply autocomplete if we have a match
+        if results:
+            self._try_apply_suggestion(self.get_selected_command())
+        else:
+            self.current_suggestion = ""
+
+    def _extract_user_input(self, full_text):
+        """Extract user-typed text, excluding any selected suggestion"""
+        if not self.search_input_widget.hasSelectedText():
+            return full_text
+
+        selected = self.search_input_widget.selectedText()
+        # Only strip if selection is at the end
+        if full_text.endswith(selected):
+            return full_text[: -len(selected)]
+        return full_text
+
+    def _try_apply_suggestion(self, suggestion):
+        """Apply autocomplete suggestion if it matches user input"""
+        if not suggestion.lower().startswith(self.user_text.lower()):
+            self.current_suggestion = ""
+            return
+
+        completion = suggestion[len(self.user_text) :].lower()
+
+        self.search_input_widget.blockSignals(True)
+        self.search_input_widget.setText(self.user_text + completion)
+        self.search_input_widget.setSelection(len(self.user_text), len(completion))
+        self.search_input_widget.blockSignals(False)
+
+        self.current_suggestion = suggestion
+
+    def _update_without_suggestion(self, text):
+        """Update state without applying autocomplete"""
+        self.user_text = text
+        self.current_suggestion = ""
+        self._update_search_tree(text)
+        if text:
+            self.cmd_manager.get_matching_commands(self, text)
+        else:
+            self._clear_and_hide_results()
+
+    def on_enter_pressed(self):
+        selected_command = self.get_selected_command()
+
+        if selected_command is None:
+            return
+
+        self.activate_command(selected_command)
+
+    def activate_command(self, name):
+        """Run the selected command."""
+        if name is None:
+            return
+
+        cmd = self.cmd_manager.commands.get(name)
+        self.cmd_manager.execute_command(self, name)
+
+        # Opening settings swaps in an in-window panel; hiding the launcher
+        # right after would hide that panel too, so leave the window shown.
+        opens_panel = cmd is not None and cmd.get("type") == "system" and cmd.get("action") == "open_settings"
+        if not opens_panel:
+            self.hide_launcher()
+
+    def open_selected_command_editor(self):
+        if hasattr(self, "view_stack") and self.view_stack.currentWidget() is not self.central_widget:
+            return
+        name = self.get_selected_command()
+        self.open_selected_command_editor_by_name(name)
+
+    def open_selected_command_editor_by_name(self, name):
+        command = self.cmd_manager.commands.get(name) if name else None
+        if command is not None and command.get("type") != "system":
+            self.open_editor(command)
+
+    def open_new_command(self):
+        if hasattr(self, "view_stack") and self.view_stack.currentWidget() is not self.central_widget:
+            return
+        if not self.isVisible():
+            self.activate_launcher()
+        self.open_editor(None)
+
+    def import_recent_programs(self):
+        self.choose_recent_programs()
+
+    def choose_recent_programs(self):
+        from .installed_programs import discover_recent_program_commands, filter_new_program_commands
+
+        candidates = discover_recent_program_commands(days=365)
+        existing_locations = self.cmd_manager.existing_command_locations()
+        candidates = filter_new_program_commands(candidates, existing_locations)
+        dialog = ProgramImportDialog(candidates, existing_locations, self.icon_manager, self)
+        if dialog.exec() != dialog.DialogCode.Accepted:
+            return
+
+        summary = self.cmd_manager.import_program_commands(dialog.selected_candidates())
+        if summary["imported"]:
+            self.cmd_manager.reprocess_command_icons(self.icon_manager)
+        imported_count = len(summary["imported"])
+        skipped_count = len(summary["skipped"])
+        message = f"Imported {imported_count} installed program command"
+        if imported_count != 1:
+            message += "s"
+        if skipped_count:
+            message += f". Skipped {skipped_count} already-present or conflicting candidate"
+            if skipped_count != 1:
+                message += "s"
+        QMessageBox.information(self, "Add Installed Programs", message + ".")
+
+        if self.user_text:
+            self.cmd_manager.get_matching_commands(self, self.user_text)
+        else:
+            self._clear_and_hide_results()
+
+    def export_commands(self):
+        user_commands = [c for c in self.cmd_manager.commands.values() if c.get("type") != "system"]
+        dialog = ExportCommandsDialog(user_commands, self.icon_manager, self)
+        if dialog.exec() != dialog.DialogCode.Accepted:
+            return
+
+        selected_names = dialog.selected_names()
+        if not selected_names:
+            return
+
+        default_path = str(Path.home() / "dash_commands.toml")
+        file_path, _ = QFileDialog.getSaveFileName(self, "Export Commands", default_path, "TOML Files (*.toml)")
+        if not file_path:
+            return
+
+        count = self.cmd_manager.export_commands(selected_names, Path(file_path))
+        QMessageBox.information(self, "Export Commands", f"Exported {count} command(s) to {file_path}.")
+
+    def import_commands(self):
+        file_path, _ = QFileDialog.getOpenFileName(self, "Import Commands", "", "TOML Files (*.toml)")
+        if not file_path:
+            return
+
+        try:
+            candidates = self.cmd_manager.parse_import_candidates(Path(file_path))
+        except Exception as e:
+            self.display_error_popup(f"Could not read commands file: {e}")
+            return
+
+        dialog = ImportCommandsDialog(candidates, self.cmd_manager, self.icon_manager, self)
+        if dialog.exec() != dialog.DialogCode.Accepted:
+            return
+
+        selected = dialog.selected_candidates()
+        if not selected:
+            return
+
+        summary = self.cmd_manager.import_commands(selected)
+        if summary["imported"]:
+            self.cmd_manager.reprocess_command_icons(self.icon_manager)
+        imported_count = len(summary["imported"])
+        skipped_count = len(summary["skipped"])
+        message = f"Imported {imported_count} command"
+        if imported_count != 1:
+            message += "s"
+        if skipped_count:
+            message += f". Skipped {skipped_count} invalid or conflicting command"
+            if skipped_count != 1:
+                message += "s"
+        QMessageBox.information(self, "Import Commands", message + ".")
+
+        if self.user_text:
+            self.cmd_manager.get_matching_commands(self, self.user_text)
+        else:
+            self._clear_and_hide_results()
+
+    def open_editor(self, command):
+        """Swap the search view for the command editor panel."""
+        from .command_editor import CommandEditorPanel
+
+        self._editor_return_center = self.frameGeometry().center()
+        panel = CommandEditorPanel(command, self.icon_manager, self.cmd_manager, self)
+        panel.closed.connect(self.close_editor)
+        self._editor_panel = panel
+        self.view_stack.addWidget(panel)
+        self.view_stack.setCurrentWidget(panel)
+        # Pin the window size: the alias grid resizes with the window, so an
+        # unconstrained window would grow without bound.
+        self._pre_editor_size = self.size()
+        self.setFixedSize(self.settings.ui.program_width, self.settings.ui.editor_height)
+        panel.command_name_edit_box.setFocus()
+
+    def close_editor(self):
+        """Return to the search view after the editor saves in the background."""
+        panel = self._editor_panel
+        if panel is None:
+            return
+        self._editor_panel = None
+        self.view_stack.setCurrentWidget(self.central_widget)
+        self.view_stack.removeWidget(panel)
+        panel.deleteLater()
+        # Pin back to the search-view size. The stack keeps the editor's large
+        # size hint, so releasing the constraint would let the window re-expand;
+        # the search view height is constant, so a fixed size is safe here.
+        self.setFixedSize(self._search_view_size)
+        restored_geometry = self.frameGeometry()
+        restored_geometry.moveCenter(getattr(self, "_editor_return_center", restored_geometry.center()))
+        self.move(restored_geometry.topLeft())
+        if hasattr(self, "_editor_return_center"):
+            del self._editor_return_center
+        # Refresh results so any edits show immediately.
+        if self.user_text:
+            self.cmd_manager.get_matching_commands(self, self.user_text)
+        else:
+            self._clear_and_hide_results()
+        self.search_input_widget.setFocus()
+
+    def get_selected_command(self):
+        item = self.results_list_widget.currentItem()
+        if item is None:
+            return None
+        result_row = cast(ResultRow, self.results_list_widget.itemWidget(item))
+        if result_row is None:
+            return None
+        return result_row.command_name
+
+    def keyPressEvent(self, event):
+        count = self.results_list_widget.count()
+        row = self.results_list_widget.currentRow()
+
+        if event.key() == Qt.Key.Key_Escape:
+            self.hide_launcher()
+        elif event.key() == Qt.Key.Key_Down and count > 0:
+            self.results_list_widget.setCurrentRow((row + 1) % count)
+        elif event.key() == Qt.Key.Key_Up and count > 0:
+            self.results_list_widget.setCurrentRow((row - 1) % count)
+        else:
+            super().keyPressEvent(event)
+
+    def _clear_and_hide_results(self):
+        """Blank search box: show only the search bar, no results list."""
+        self.results_list_widget.clear()
+        self.results_list_widget.hide()
+        self._sync_search_view_size()
+
+    def show_results(self, results):
+        self.results_list_widget.show()
+        self.results_list_widget.clear()
+        self._sync_search_view_size()
+
+        if not results:
+            # Try calculator fallback
+            try:
+                result = eval_expression(self.search_input_widget.text())
+                # Show calculator result
+                item = QListWidgetItem(self.results_list_widget)
+                result_widget = ResultRow(
+                    self,
+                    icon_path=self.settings.paths.calculator_icon,
+                    command=f"= {result}",
+                    description="Calculator result (press Enter to copy)",
+                )
+                item.setSizeHint(result_widget.sizeHint())
+                self.results_list_widget.setItemWidget(item, result_widget)
+                self.results_list_widget.setCurrentRow(0)
+                print(f"Calculator: {result}")
+            except ValueError:
+                # Show "No results" message using ResultRow
+                item = QListWidgetItem(self.results_list_widget)
+                no_results_widget = ResultRow(
+                    self,
+                    icon_path=self.settings.paths.no_result_icon,
+                    command="No results found",
+                    description="(press Enter to cancel)",
+                )
+                item.setSizeHint(no_results_widget.sizeHint())
+                self.results_list_widget.setItemWidget(item, no_results_widget)
+                self.results_list_widget.setCurrentRow(0)
+            return
+
+        # Show regular command results
+        for result in results:
+            item = QListWidgetItem(self.results_list_widget)
+            icon_path = self.icon_manager.get_icon_path(result)
+            description = result["description"] if self.settings.search.show_descriptions else ""
+            result_widget = ResultRow(
+                self,
+                icon_path=icon_path,
+                command=result["name"],
+                description=description,
+                editable=result.get("type") != "system",
+            )
+            item.setSizeHint(result_widget.sizeHint())
+            self.results_list_widget.setItemWidget(item, result_widget)
+        self.results_list_widget.setCurrentRow(0)
+
+    def show_about(self):
+        """Show about dialog"""
+        import dash  # imported lazily to avoid circular import with src package
+        version = getattr(dash, "__version__", "Unknown")
+
+        about_box = QMessageBox()
+        about_box.setWindowTitle("About Dash")
+        about_box.setIconPixmap(QPixmap(self.settings.paths.program_icon).scaled(64, 64, Qt.AspectRatioMode.KeepAspectRatio))
+        about_box.setText("<h2>Dash</h2>")
+        hotkey = self._format_shortcut(self.settings.general.hotkey)
+        new_command = self._format_shortcut(self.settings.shortcuts.new_command)
+        edit_command = self._format_shortcut(self.settings.shortcuts.edit_selected_command)
+        about_box.setInformativeText(
+            f"Version {version}\n\n"
+            "A quick command launcher for Windows.\n\n"
+            "Keyboard shortcuts:\n"
+            f"{hotkey}  Open Dash\n"
+            f"{new_command}  New command\n"
+            f"{edit_command}  Edit selected command\n\n"
+            "© 2025 Calem Young"
+        )
+        about_box.exec()
+
+
+class ResultRow(QWidget):
+    ICON_SIZE = 42
+    ICON_BOX_SIZE = 46
+
+    def __init__(self, main_window: MainWindow, icon_path, command, description, command_name=None, editable=False):
+        super().__init__()
+
+        # Logical name used to activate the row (defaults to the display text).
+        self.command_name = command if command_name is None else command_name
+
+        # Create the main horizontal layout
+        row_layout = QHBoxLayout(self)
+        row_layout.setContentsMargins(4, 3, 8, 3)
+        row_layout.setSpacing(8)
+
+        # Icon label
+        self.icon_label = QLabel()
+        pixmap = QPixmap(icon_path)
+        self.icon_label.setPixmap(
+            pixmap.scaled(
+                self.ICON_SIZE,
+                self.ICON_SIZE,
+                Qt.AspectRatioMode.KeepAspectRatio,
+                Qt.TransformationMode.SmoothTransformation,
+            )
+        )
+        self.icon_label.setFixedSize(self.ICON_BOX_SIZE, self.ICON_BOX_SIZE)
+        self.icon_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+
+        # Command label (bold, larger)
+        self.command_label = QLabel(command)
+        self.command_label.setObjectName("ResultCommandLabel")
+        command_font = self.command_label.font()
+        command_font.setPointSize(main_window.settings.ui.result_font_size)
+        self.command_label.setFont(command_font)
+
+        # Description label (gray, smaller)
+        self.description_label = QLabel(description)
+        self.description_label.setObjectName("ResultDescriptionLabel")
+        description_font = self.description_label.font()
+        description_font.setPointSize(main_window.settings.ui.description_font_size)
+        self.description_label.setFont(description_font)
+
+        self.mode_label = QLabel("")
+        self.mode_label.setObjectName("ResultModeLabel")
+
+        # Text layout (vertical - command above description)
+        text_layout = QVBoxLayout()
+        text_layout.setSpacing(2)
+
+        # Add labels to text layout
+        text_layout.addWidget(self.command_label)
+        text_layout.addWidget(self.description_label)
+
+        # Add icon and text layout to main row
+        row_layout.addWidget(self.icon_label)
+        row_layout.addLayout(text_layout)
+        row_layout.addStretch()  # Push items apart
+        # row_layout.addWidget(self.mode_label)
+
+        self.main_window = main_window
+        if editable:
+            self.edit_button = QPushButton()
+            self.edit_button.setObjectName("ResultEditButton")
+            self.edit_button.setIcon(QIcon(glyph_pixmap(OutlineIcon.PENCIL, 18, QColor("#8b929e"))))
+            self.edit_button.setIconSize(QSize(18, 18))
+            self.edit_button.setFixedSize(30, 30)
+            self.edit_button.setToolTip("Edit command")
+            self.edit_button.setCursor(Qt.CursorShape.PointingHandCursor)
+            self.edit_button.clicked.connect(lambda: self.main_window.open_selected_command_editor_by_name(self.command_name))
+            row_layout.addWidget(self.edit_button)
+
+    def mousePressEvent(self, a0: QMouseEvent | None) -> None:
+        # launch command
+        self.main_window.activate_command(self.command_name)
+        return super().mousePressEvent(a0)

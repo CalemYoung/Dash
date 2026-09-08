@@ -1,0 +1,15 @@
+# Build artifacts
+build/dash/
+build/temp/
+dist/
+
+# Other
+assets/cache/
+config/commands.toml
+config/settings.toml
+__pycache__/
+*.pyc
+.venv/
+.vscode/
+
+version_info.txt

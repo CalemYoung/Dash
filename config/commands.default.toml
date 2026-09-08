@@ -1,0 +1,9 @@
+# Default commands file installed for new Dash users.
+# Add commands via the app (New Command / Auto-Populate / Import) or edit this
+# file directly using [[command]] blocks, e.g.:
+#
+# [[command]]
+# name = "My App"
+# aliases = ["app"]
+# location = 'C:\Path\To\App.exe'
+# description = "Opens My App"
