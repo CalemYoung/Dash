@@ -6,6 +6,7 @@ from PyQt6.QtCore import QFileInfo, QSize, Qt, pyqtSignal
 from PyQt6.QtGui import QColor, QIcon, QKeySequence, QPainter, QPen, QShortcut
 from PyQt6.QtWidgets import (
     QCheckBox,
+    QComboBox,
     QDialog,
     QDialogButtonBox,
     QDoubleSpinBox,
@@ -52,6 +53,20 @@ class NoScrollDoubleSpinBox(QDoubleSpinBox):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.setButtonSymbols(QDoubleSpinBox.ButtonSymbols.UpDownArrows)
+        self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+
+    def wheelEvent(self, event):
+        if self.hasFocus():
+            super().wheelEvent(event)
+        else:
+            event.ignore()
+
+
+class NoScrollComboBox(QComboBox):
+    """Combo box that ignores the wheel unless focused, like the spin boxes."""
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
 
     def wheelEvent(self, event):
@@ -158,8 +173,33 @@ from .settings import (
     UISettings,
 )
 from .installed_programs import filter_new_program_commands
-from .icon_browser import FRAMELESS_DIALOG, DragToMoveMixin
+from .icon_browser import FRAMELESS_DIALOG, RECIPE_KEYS, DragToMoveMixin
 from .command_editor import CommandEditorPanel
+
+
+def apply_edited_candidate(candidate: dict, edited: dict) -> None:
+    """Fold the editor's result back into an import candidate in place.
+
+    Icon handling: a recipe or rendered icon chosen in the editor replaces
+    whatever icon data the candidate arrived with (including an embedded
+    source image from an export). If the editor left the icon alone, the
+    candidate's icon data is kept so it still reaches the import.
+    """
+    candidate.update(
+        {
+            "name": edited["name"],
+            "aliases": list(edited.get("aliases", [])),
+            "location": edited.get("location", ""),
+            "description": edited.get("description", ""),
+            "type": edited.get("type", "file"),
+        }
+    )
+    new_recipe = {key: edited[key] for key in RECIPE_KEYS if edited.get(key)}
+    if new_recipe or edited.get("icon"):
+        for key in (*RECIPE_KEYS, "icon_source_data"):
+            candidate.pop(key, None)
+        candidate.update(new_recipe)
+        candidate["icon"] = edited.get("icon")
 
 
 class CommandEditDialog(DragToMoveMixin, QDialog):
@@ -219,6 +259,7 @@ class SettingsEditorPanel(QFrame):
     importProgramsRequested = pyqtSignal()
     exportCommandsRequested = pyqtSignal()
     importCommandsRequested = pyqtSignal()
+    resetRunCountsRequested = pyqtSignal()
 
     def __init__(self, settings, settings_path: Path, parent=None):
         super().__init__(parent)
@@ -331,6 +372,16 @@ class SettingsEditorPanel(QFrame):
     def _color(value):
         return ColorButton(value)
 
+    @staticmethod
+    def _choice(value, options):
+        """Drop-down over (stored_value, label) pairs; unknown values fall back to the first."""
+        control = NoScrollComboBox()
+        for stored, label in options:
+            control.addItem(label, stored)
+        index = control.findData(value)
+        control.setCurrentIndex(index if index >= 0 else 0)
+        return control
+
     def _ui_group(self):
         opacity = NoScrollDoubleSpinBox()
         opacity.setRange(0.30, 1.00)
@@ -381,12 +432,20 @@ class SettingsEditorPanel(QFrame):
                 ),
                 ("Autocomplete", "search.autocomplete", self._check(self._settings.search.autocomplete)),
                 (
+                    "Sort results by",
+                    "search.sort_results",
+                    self._choice(
+                        self._settings.search.sort_results,
+                        [("popularity", "Most used first"), ("name", "Name (A to Z)")],
+                    ),
+                ),
+                (
                     "Show descriptions",
                     "search.show_descriptions",
                     self._check(self._settings.search.show_descriptions),
                 ),
                 (
-                    "Show command run counter",
+                    "Show run count on results",
                     "search.show_run_counter",
                     self._check(self._settings.search.show_run_counter),
                 ),
@@ -434,15 +493,23 @@ class SettingsEditorPanel(QFrame):
         import_button.setCursor(Qt.CursorShape.PointingHandCursor)
         import_button.clicked.connect(self.importCommandsRequested.emit)
 
+        reset_counts_button = QPushButton("Reset All Run Counts...")
+        reset_counts_button.setCursor(Qt.CursorShape.PointingHandCursor)
+        reset_counts_button.setToolTip("Set every command's run count back to zero")
+        reset_counts_button.clicked.connect(self.resetRunCountsRequested.emit)
+
         layout.addWidget(auto_populate_button)
         layout.addWidget(export_button)
         layout.addWidget(import_button)
+        layout.addWidget(reset_counts_button)
         return group
 
     def _value(self, key) -> Any:
         control = self._controls[key]
         if isinstance(control, ColorButton):
             return control.color()
+        if isinstance(control, QComboBox):
+            return control.currentData()
         if isinstance(control, QCheckBox):
             return control.isChecked()
         if isinstance(control, (QSpinBox, QDoubleSpinBox)):
@@ -474,6 +541,7 @@ class SettingsEditorPanel(QFrame):
             search=SearchSettings(
                 max_results=self._value("search.max_results"),
                 autocomplete=self._value("search.autocomplete"),
+                sort_results=self._value("search.sort_results"),
                 show_descriptions=self._value("search.show_descriptions"),
                 show_run_counter=self._value("search.show_run_counter"),
                 show_command_tree=self._value("search.show_command_tree"),
@@ -504,6 +572,8 @@ class SettingsEditorPanel(QFrame):
         for control in self._controls.values():
             if isinstance(control, ColorButton):
                 control.colorChanged.connect(self._update_dirty_state)
+            elif isinstance(control, QComboBox):
+                control.currentIndexChanged.connect(self._update_dirty_state)
             elif isinstance(control, QLineEdit):
                 control.textChanged.connect(self._update_dirty_state)
             elif isinstance(control, QCheckBox):
@@ -522,15 +592,28 @@ class SettingsEditorPanel(QFrame):
 
 
 class ProgramImportDialog(DragToMoveMixin, QDialog):
-    """Choose discovered programs before adding them as Dash commands."""
+    """Choose discovered programs before adding them as Dash commands.
 
-    def __init__(self, candidates: list[dict], existing_locations: set[str], icon_manager=None, parent=None):
+    Any candidate can be opened in the command editor (Edit Selected, or a
+    double-click) to change its name, aliases, description, target or icon
+    before it is added.
+    """
+
+    def __init__(
+        self,
+        candidates: list[dict],
+        existing_locations: set[str],
+        icon_manager=None,
+        parent=None,
+        command_manager=None,
+    ):
         super().__init__(parent)
         self.setWindowTitle("Auto-Populate Commands")
         self.setObjectName("ProgramImportDialog")
         self.setWindowFlags(FRAMELESS_DIALOG)
         self.setMinimumSize(560, 640)
         self._icon_manager = icon_manager
+        self._command_manager = command_manager
         self._icon_provider = QFileIconProvider()
 
         title = QLabel("Auto-Populate Commands")
@@ -542,16 +625,18 @@ class ProgramImportDialog(DragToMoveMixin, QDialog):
 
         selectable_candidates = filter_new_program_commands(candidates, existing_locations)
         for candidate in selectable_candidates:
-            item = QListWidgetItem(f"{candidate['name']}\n{candidate['location']}")
-            item.setIcon(self._resolve_icon(candidate))
-            item.setData(Qt.ItemDataRole.UserRole, candidate)
-            item.setFlags(item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
-            item.setCheckState(Qt.CheckState.Unchecked)
-            self.program_list.addItem(item)
+            self._add_item(candidate)
 
         empty_message = QLabel("No new installed programs were found." if not selectable_candidates else "")
         empty_message.setObjectName("dialogSubtitle")
         empty_message.setVisible(not selectable_candidates)
+
+        edit_button = QPushButton("Edit Selected...")
+        edit_button.setObjectName("programImportSelectButton")
+        edit_button.setEnabled(bool(selectable_candidates) and command_manager is not None)
+        edit_button.setToolTip("Open the selected program in the editor before adding it")
+        edit_button.clicked.connect(self._edit_selected)
+        self.program_list.itemDoubleClicked.connect(lambda _item: self._edit_selected())
 
         select_all_button = QPushButton("Select All")
         select_none_button = QPushButton("Select None")
@@ -565,6 +650,7 @@ class ProgramImportDialog(DragToMoveMixin, QDialog):
         selection_row = QHBoxLayout()
         selection_row.addWidget(QLabel(f"{len(selectable_candidates)} found"))
         selection_row.addStretch(1)
+        selection_row.addWidget(edit_button)
         selection_row.addWidget(select_all_button)
         selection_row.addWidget(select_none_button)
 
@@ -606,10 +692,52 @@ class ProgramImportDialog(DragToMoveMixin, QDialog):
                 return icon
         return QIcon()
 
+    def _add_item(self, candidate: dict, row: int | None = None, checked: bool = False):
+        label = f"{candidate.get('name', '')}\n{candidate.get('location', '')}"
+        aliases = [str(alias) for alias in candidate.get("aliases", []) if str(alias).strip()]
+        if aliases:
+            label += "\nAliases: " + ", ".join(aliases)
+        error = candidate.get("_error")
+        if error:
+            label += f"\n⚠ {error}"
+        item = QListWidgetItem(label)
+        item.setIcon(self._resolve_icon(candidate))
+        item.setData(Qt.ItemDataRole.UserRole, candidate)
+        item.setFlags(item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
+        item.setCheckState(Qt.CheckState.Checked if checked else Qt.CheckState.Unchecked)
+        if error:
+            item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsUserCheckable)
+            item.setForeground(QColor("#d9534f"))
+        if row is None:
+            self.program_list.addItem(item)
+        else:
+            self.program_list.insertItem(row, item)
+        return item
+
+    def _edit_selected(self):
+        """Open the selected program in the command editor and apply the result."""
+        item = self.program_list.currentItem()
+        if item is None or self._command_manager is None:
+            return
+        candidate = item.data(Qt.ItemDataRole.UserRole)
+
+        dialog = CommandEditDialog(candidate, self._command_manager, self._icon_manager, self, title="Edit Program")
+        if dialog.exec() != QDialog.DialogCode.Accepted or dialog.result_command is None:
+            return
+
+        apply_edited_candidate(candidate, dialog.result_command)
+        candidate["_error"], candidate["_conflict"] = self._command_manager.check_import_candidate(candidate)
+
+        row = self.program_list.row(item)
+        self.program_list.takeItem(row)
+        importable = not candidate["_error"] and not candidate["_conflict"]
+        new_item = self._add_item(candidate, row=row, checked=importable)
+        self.program_list.setCurrentItem(new_item)
+
     def _set_all_checked(self, state: Qt.CheckState):
         for index in range(self.program_list.count()):
             item = self.program_list.item(index)
-            if item is not None:
+            if item is not None and item.flags() & Qt.ItemFlag.ItemIsUserCheckable:
                 item.setCheckState(state)
 
     def selected_candidates(self) -> list[dict]:
@@ -868,22 +996,15 @@ class ImportCommandsDialog(DragToMoveMixin, QDialog):
         if item is None:
             return
         candidate = item.data(Qt.ItemDataRole.UserRole)
+        # An icon that arrived as embedded bytes becomes a source file first,
+        # so the editor can show it and keep it like any other recipe.
+        self._command_manager.materialize_candidate_source(candidate)
 
         dialog = CommandEditDialog(candidate, self._command_manager, self._icon_manager, self, title="Edit Import")
         if dialog.exec() != QDialog.DialogCode.Accepted or dialog.result_command is None:
             return
 
-        edited = dialog.result_command
-        candidate.update(
-            {
-                "name": edited["name"],
-                "aliases": list(edited.get("aliases", [])),
-                "location": edited.get("location", ""),
-                "description": edited.get("description", ""),
-                "type": edited.get("type", "file"),
-                "icon": edited.get("icon"),
-            }
-        )
+        apply_edited_candidate(candidate, dialog.result_command)
         candidate["_error"], candidate["_conflict"] = self._command_manager.check_import_candidate(candidate)
 
         row = self.command_list.row(item)

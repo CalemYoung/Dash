@@ -18,7 +18,7 @@ from PyQt6.QtCore import Qt, QSize, QUrl, QTimer, QFileInfo, pyqtSignal
 from PyQt6.QtGui import QIcon, QColor, QPixmap, QDesktopServices
 from PyQt6.QtNetwork import QNetworkAccessManager, QNetworkRequest, QNetworkReply
 
-from src.icon_browser import IconStudio, glyph_pixmap, OutlineIcon
+from src.icon_browser import IconStudio, glyph_pixmap, OutlineIcon, recipe_from_command, recipe_to_fields, render_recipe
 
 
 class CommandType(IntEnum):
@@ -410,8 +410,11 @@ class CommandEditorPanel(QFrame):
         self._original_name = self._command.get("name") if command and not standalone else None
         self._resolved_icon = QIcon()
         self._icon_path = self._command.get("icon")
+        # What made the icon (library glyph or source image, plus colours), if known.
+        self._icon_recipe = recipe_from_command(self._command) if command else None
 
         self._initial_name = self._command.get("name", "") if command else ""
+        self._initial_recipe = dict(self._icon_recipe) if self._icon_recipe else None
         self._initial_description = self._command.get("description", "") if command else ""
         self._initial_type = CommandType.from_command(self._command) if command else CommandType.APP
         self._initial_location = self._command.get("location", "") if command else ""
@@ -481,6 +484,15 @@ class CommandEditorPanel(QFrame):
         self.delete_command_btn.clicked.connect(self._delete_and_close)
         # Deleting only makes sense for a command that is actually stored.
         self.delete_command_btn.setVisible(command is not None and not standalone)
+
+        # Reset is likewise only for stored commands, and only while there is
+        # something to reset. It takes effect immediately, like Delete: it is
+        # not part of the Save/Cancel edit cycle.
+        self.reset_count_btn = QPushButton()
+        self.reset_count_btn.setObjectName("ResetRunCountButton")
+        self.reset_count_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.reset_count_btn.clicked.connect(self._reset_run_count)
+        self._refresh_reset_button()
         self.close_button = QPushButton("Close")
         self.close_button.setCursor(Qt.CursorShape.PointingHandCursor)
         self.close_button.clicked.connect(self._cancel_and_close)
@@ -493,6 +505,7 @@ class CommandEditorPanel(QFrame):
         self.save_button.clicked.connect(self._save_and_close)
         bottom_row = QHBoxLayout()
         bottom_row.addWidget(self.delete_command_btn)
+        bottom_row.addWidget(self.reset_count_btn)
         bottom_row.addStretch(1)
         bottom_row.addWidget(self.close_button)
         bottom_row.addWidget(self.cancel_button)
@@ -564,14 +577,25 @@ class CommandEditorPanel(QFrame):
         self.command_description_edit_box.setText(command.get("description", ""))
         self.command_action.command_action_edit_box.setText(command.get("location", ""))
         self.alias_box.set_aliases(command.get("aliases", []))
+        # Setting the location above resolved the target's own icon, which
+        # clears the stored icon path and recipe; put the stored ones back.
         icon_path = command.get("icon")
+        recipe = recipe_from_command(command)
         is_url = CommandType.from_command(command) == CommandType.URL
         is_generated_favicon = icon_path and Path(icon_path).stem.startswith("auto_web_")
         if icon_path and Path(icon_path).exists() and not (is_url and is_generated_favicon):
             icon = QIcon(icon_path)
             self._resolved_icon = icon
             self._icon_path = icon_path
+            self._icon_recipe = recipe
             self._command_icon.setIcon(icon)
+        elif recipe is not None:
+            # No rendered file yet (an import candidate, say): preview the recipe.
+            pixmap = render_recipe(recipe)
+            if pixmap is not None and not pixmap.isNull():
+                self._resolved_icon = QIcon(pixmap)
+                self._command_icon.setIcon(self._resolved_icon)
+            self._icon_recipe = recipe
         elif is_url:
             self._command_icon.setIcon(QIcon(self.icon_manager.settings.paths.url_command_icon))
 
@@ -597,6 +621,7 @@ class CommandEditorPanel(QFrame):
             or current_location != self._initial_location
             or current_aliases != self._initial_aliases
             or current_icon != self._initial_icon
+            or self._icon_recipe != self._initial_recipe
         )
 
     def _update_dirty_state(self):
@@ -610,6 +635,7 @@ class CommandEditorPanel(QFrame):
         if not icon.isNull():
             self._resolved_icon = icon
             self._icon_path = None
+            self._icon_recipe = None  # the icon now comes from the target, not the studio
         self._command_icon.setIcon(icon if not icon.isNull() else self._default_command_icon)
         self._update_dirty_state()
 
@@ -644,6 +670,7 @@ class CommandEditorPanel(QFrame):
             "icon": self._icon_path,
             "type": command_type.to_stored_type(),
             "command_type": command_type.name.lower(),
+            **recipe_to_fields(self._icon_recipe),
         }
 
     def _save_and_close(self):
@@ -653,8 +680,12 @@ class CommandEditorPanel(QFrame):
             self._show_validation_error(error)
             return
         if entry is not None:
-            if entry["icon"] is None and not self._resolved_icon.isNull():
-                entry["icon"] = self.icon_manager.save_command_icon(self._resolved_icon, entry["name"])
+            if entry["icon"] is None:
+                if self._icon_recipe:
+                    # Render the recipe at full size rather than saving the preview.
+                    entry["icon"] = self.icon_manager.render_recipe_icon(entry)
+                elif not self._resolved_icon.isNull():
+                    entry["icon"] = self.icon_manager.save_command_icon(self._resolved_icon, entry["name"])
             if self._standalone:
                 self.saved.emit(entry)
             else:
@@ -681,6 +712,19 @@ class CommandEditorPanel(QFrame):
     def _cancel_and_close(self):
         self.closed.emit()
 
+    def _refresh_reset_button(self):
+        count = int(self._command.get("times_executed", 0) or 0)
+        self.reset_count_btn.setText(f"Reset run count ({count})")
+        self.reset_count_btn.setToolTip(f"Run {count} time{'s' if count != 1 else ''}. Set the count back to zero.")
+        self.reset_count_btn.setVisible(bool(self._original_name) and not self._standalone and count > 0)
+
+    def _reset_run_count(self):
+        if not self._original_name:
+            return
+        self.cmd_manager.reset_run_count(self._original_name)
+        self._command["times_executed"] = 0
+        self._refresh_reset_button()
+
     def _delete_and_close(self):
         self.icon_manager.delete_command_icon(self._command.get("icon"))
         if self._original_name:
@@ -688,7 +732,11 @@ class CommandEditorPanel(QFrame):
         self.closed.emit()
 
     def open_icon_browser(self):
-        self._icon_studio = IconStudio(initial_path=self._icon_path, initial_icon=self._command_icon.icon())
+        self._icon_studio = IconStudio(
+            initial_path=self._icon_path,
+            initial_icon=self._command_icon.icon(),
+            initial_recipe=self._icon_recipe,
+        )
         self._icon_studio.setWindowModality(Qt.WindowModality.ApplicationModal)
         self._icon_studio.accepted.connect(self._accept_icon_studio)
         self._icon_studio.show()
@@ -698,6 +746,19 @@ class CommandEditorPanel(QFrame):
         icon_path = str(self.icon_manager.command_icon_path(name))
         if not self._icon_studio.save_png(icon_path):
             return
+
+        # Keep the recipe alongside the rendered PNG. Disk artwork has no
+        # name to refer back to, so its untinted source is stored too.
+        recipe = self._icon_studio.recipe()
+        if not recipe["glyph"]:
+            base = self._icon_studio.base_pixmap()
+            source_path = self.icon_manager.command_source_icon_path(name)
+            if base is not None and not base.isNull() and base.save(str(source_path), "PNG"):
+                recipe["source"] = str(source_path)
+            else:
+                recipe = None
+        self._icon_recipe = recipe
+
         self._icon_path = icon_path
         self._resolved_icon = QIcon(icon_path)
         self._command_icon.setIcon(self._resolved_icon)

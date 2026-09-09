@@ -3,9 +3,10 @@ hotkey = "Alt+F"
 show_on_screen_with_mouse = false
 
 [ui]
-program_width = 500
+program_width = 600
 search_height = 70
-results_height = 160
+# Sized to five whole result rows; the list snaps to whole rows anyway.
+results_height = 288
 editor_height = 600
 window_opacity = 0.97
 search_font_size = 24
@@ -13,7 +14,7 @@ search_text_color = "#f3f4f7"
 result_font_size = 14
 result_text_color = "#e7e9ee"
 description_font_size = 10
-description_text_color = "#808080"
+description_text_color = "#8f96a3"
 clock_font_size = 10
 clock_day_text_color = "#f3f4f7"
 clock_date_text_color = "#9da4b0"
@@ -21,8 +22,11 @@ clock_date_text_color = "#9da4b0"
 [search]
 max_results = 20
 autocomplete = true
+# "popularity" puts the most-run matches first (ties by name); "name" is alphabetical.
+sort_results = "popularity"
 show_descriptions = true
-show_run_counter = true
+# Counts are always recorded; this only controls whether the pill is shown.
+show_run_counter = false
 show_command_tree = true
 
 [shortcuts]

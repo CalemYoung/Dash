@@ -70,10 +70,14 @@ class UISettings:
     clock_date_text_color: str = DEFAULT_SETTINGS["ui"]["clock_date_text_color"]
 
 
+SORT_RESULTS_OPTIONS = ("popularity", "name")
+
+
 @dataclass
 class SearchSettings:
     max_results: int = DEFAULT_SETTINGS["search"]["max_results"]
     autocomplete: bool = DEFAULT_SETTINGS["search"]["autocomplete"]
+    sort_results: str = DEFAULT_SETTINGS["search"]["sort_results"]
     show_descriptions: bool = DEFAULT_SETTINGS["search"]["show_descriptions"]
     show_run_counter: bool = DEFAULT_SETTINGS["search"]["show_run_counter"]
     show_command_tree: bool = DEFAULT_SETTINGS["search"]["show_command_tree"]
@@ -159,6 +163,8 @@ class Settings:
             shortcuts=_from_section(ShortcutSettings, data.get("shortcuts", {})),
             paths=_from_section(PathSettings, data.get("paths", {})),
         )
+        if settings.search.sort_results not in SORT_RESULTS_OPTIONS:
+            settings.search.sort_results = SORT_RESULTS_OPTIONS[0]
         return settings.normalize_resource_paths()
 
     @classmethod

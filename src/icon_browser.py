@@ -268,33 +268,45 @@ def tint_pixmap(pixmap, color):
     filling the whole silhouette. A genuinely flat glyph still comes out as
     one solid colour, but shading (like a darker gear on a lighter body)
     stays visible instead of being erased.
+
+    Done with Qt image operations rather than a per-pixel Python loop: at
+    256px the loop cost ~100ms per icon, which mattered once icons started
+    being rendered from recipes in bulk.
     """
     image = pixmap.toImage().convertToFormat(QImage.Format.Format_ARGB32)
-    w, h = image.width(), image.height()
-    out = QImage(image.size(), QImage.Format.Format_ARGB32)
-    out.fill(Qt.GlobalColor.transparent)
+    if image.isNull():
+        return pixmap
 
-    pixels = []
-    max_luminance = 0.0
-    for y in range(h):
-        for x in range(w):
-            c = image.pixelColor(x, y)
-            alpha = c.alpha()
-            if alpha == 0:
-                continue
-            luminance = (0.299 * c.red() + 0.587 * c.green() + 0.114 * c.blue()) / 255.0
-            pixels.append((x, y, alpha, luminance))
-            if luminance > max_luminance:
-                max_luminance = luminance
+    # Brightest opaque pixel. Premultiplying first makes transparent pixels
+    # read as black, so they cannot inflate the maximum.
+    premultiplied_gray = image.convertToFormat(QImage.Format.Format_ARGB32_Premultiplied).convertToFormat(
+        QImage.Format.Format_Grayscale8
+    )
+    row_bytes = premultiplied_gray.bytesPerLine()
+    width = premultiplied_gray.width()
+    raw = premultiplied_gray.constBits()
+    raw.setsize(premultiplied_gray.sizeInBytes())
+    data = bytes(raw)
+    max_luminance = 0
+    for y in range(premultiplied_gray.height()):
+        row = data[y * row_bytes : y * row_bytes + width]
+        if row:
+            max_luminance = max(max_luminance, max(row))
 
+    # Map luminance -> scaled colour through a palette, then restore alpha.
     r, g, b = color.red(), color.green(), color.blue()
-    for x, y, alpha, luminance in pixels:
-        relative = (luminance / max_luminance) if max_luminance > 0.02 else 1.0
-        out.setPixelColor(
-            x,
-            y,
-            QColor(round(r * relative), round(g * relative), round(b * relative), alpha),
-        )
+    table = []
+    for level in range(256):
+        relative = min(1.0, level / max_luminance) if max_luminance > 5 else 1.0
+        table.append(QColor(round(r * relative), round(g * relative), round(b * relative)).rgb())
+    indexed = image.convertToFormat(QImage.Format.Format_Grayscale8).convertToFormat(QImage.Format.Format_Indexed8)
+    indexed.setColorTable(table)
+    out = indexed.convertToFormat(QImage.Format.Format_ARGB32)
+
+    painter = QPainter(out)
+    painter.setCompositionMode(QPainter.CompositionMode.CompositionMode_DestinationIn)
+    painter.drawImage(0, 0, image)
+    painter.end()
     return QPixmap.fromImage(out)
 
 
@@ -338,6 +350,88 @@ def export_png(base_pixmap, icon_color, bg_color, path, size=EXPORT_SIZE):
     """Write the coloured icon to disk. No UI; call this from any automation."""
     composed = compose(base_pixmap, icon_color, bg_color, size, transparent_checker=False)
     return composed.save(path, "PNG")
+
+
+# --------------------------------------------------------------------------- #
+# icon recipes
+# --------------------------------------------------------------------------- #
+#
+# A recipe is what made an icon: a source (a library glyph name, or a source
+# image kept in the icon store) plus the tint and background colours. The
+# flattened PNG on the command is only a render cache of it. Recipes let the
+# studio reopen exactly what was chosen, and let exports carry an icon as a
+# few strings instead of pixels.
+
+RECIPE_KEYS = ("icon_glyph", "icon_source", "icon_color", "icon_background")
+
+
+def glyph_name(member) -> str:
+    """'outline:SETTINGS' / 'filled:STAR' for a pytablericons member."""
+    variant = "filled" if isinstance(member, FilledIcon) else "outline"
+    return f"{variant}:{member.name}"
+
+
+def glyph_member(name):
+    """Inverse of glyph_name; None if the name is not a known glyph."""
+    try:
+        variant, _, member_name = str(name).partition(":")
+        enum_cls = {"outline": OutlineIcon, "filled": FilledIcon}[variant]
+        return enum_cls[member_name]
+    except (KeyError, ValueError):
+        return None
+
+
+def recipe_from_command(command: dict):
+    """Recipe dict from a stored command's fields, or None if it has none."""
+    glyph = command.get("icon_glyph") or None
+    source = command.get("icon_source") or None
+    if not glyph and not source:
+        return None
+    return {
+        "glyph": glyph,
+        "source": source,
+        "color": command.get("icon_color") or None,
+        "background": command.get("icon_background") or None,
+    }
+
+
+def recipe_to_fields(recipe) -> dict:
+    """Stored-command fields for a recipe; an empty dict clears them."""
+    if not recipe:
+        return {}
+    fields = {}
+    if recipe.get("glyph"):
+        fields["icon_glyph"] = recipe["glyph"]
+    if recipe.get("source"):
+        fields["icon_source"] = str(recipe["source"])
+    if recipe.get("color"):
+        fields["icon_color"] = recipe["color"]
+    if recipe.get("background"):
+        fields["icon_background"] = recipe["background"]
+    return fields
+
+
+def recipe_base_pixmap(recipe, size=WORK_RENDER_SIZE):
+    """The untinted artwork a recipe starts from, or None if unavailable."""
+    if not recipe:
+        return None
+    if recipe.get("glyph"):
+        member = glyph_member(recipe["glyph"])
+        return None if member is None else render_icon(member, size)
+    source = recipe.get("source")
+    if source and Path(str(source)).exists():
+        return load_icon_file(str(source), size)
+    return None
+
+
+def render_recipe(recipe, size=EXPORT_SIZE):
+    """Fully rendered icon for a recipe as a QPixmap, or None."""
+    base = recipe_base_pixmap(recipe)
+    if base is None:
+        return None
+    color = QColor(recipe["color"]) if recipe.get("color") else None
+    background = QColor(recipe["background"]) if recipe.get("background") else None
+    return compose(base, color, background, size, transparent_checker=False)
 
 
 def placeholder_pixmap(size):
@@ -975,7 +1069,7 @@ class IconStudio(DragToMoveMixin, QMainWindow):
     accepted = pyqtSignal()
     rejected = pyqtSignal()
 
-    def __init__(self, standalone=False, initial_path=None, initial_icon=None):
+    def __init__(self, standalone=False, initial_path=None, initial_icon=None, initial_recipe=None):
         super().__init__()
         self._standalone = standalone
         self.setWindowTitle("Modify Icon")
@@ -986,9 +1080,11 @@ class IconStudio(DragToMoveMixin, QMainWindow):
         # working state
         self._base = None  # master pixmap of the loaded icon
         self._source_name = None
+        self._library_member = None  # set when the artwork came from the Tabler library
         self._icon_color = QColor(DEFAULT_ICON_COLOR)
         self._bg_color = None
         self._picker = None
+        self._initial_recipe = initial_recipe
 
         central = QWidget()
         central.setObjectName("central")
@@ -1088,8 +1184,37 @@ class IconStudio(DragToMoveMixin, QMainWindow):
         buttons.rejected.connect(self._cancel)
         layout.addWidget(buttons)
 
-        self._load_default_icon(initial_path, initial_icon)
+        if not self._load_recipe(initial_recipe):
+            self._load_default_icon(initial_path, initial_icon)
         self._refresh()
+
+    # -- recipe --------------------------------------------------------------- #
+
+    def recipe(self):
+        """What made the current icon. `source` is left None for disk artwork:
+        the caller decides where to keep the source image and fills it in."""
+        return {
+            "glyph": glyph_name(self._library_member) if self._library_member is not None else None,
+            "source": None,
+            "color": self._icon_color.name() if self._icon_color is not None else None,
+            "background": self._bg_color.name() if self._bg_color is not None else None,
+        }
+
+    def base_pixmap(self):
+        """The untinted, background-stripped artwork the colours apply to."""
+        return self._base
+
+    def _load_recipe(self, recipe):
+        """Reopen exactly what a recipe describes, skipping colour inference."""
+        base = recipe_base_pixmap(recipe)
+        if base is None:
+            return False
+        self._library_member = glyph_member(recipe["glyph"]) if recipe.get("glyph") else None
+        self._icon_color = QColor(recipe["color"]) if recipe.get("color") else None
+        self._bg_color = QColor(recipe["background"]) if recipe.get("background") else None
+        name = self._library_member.name.lower() if self._library_member is not None else Path(str(recipe["source"])).name
+        self._set_icon(base, name)
+        return True
 
     def _accept(self):
         self.accepted.emit()
@@ -1148,6 +1273,7 @@ class IconStudio(DragToMoveMixin, QMainWindow):
             return
         name = path.rsplit("/", 1)[-1].rsplit("\\", 1)[-1]
         pixmap = self._detect_and_set_colors(pixmap)
+        self._library_member = None
         self._set_icon(pixmap, name)
 
     def _load_from_library(self):
@@ -1174,6 +1300,7 @@ class IconStudio(DragToMoveMixin, QMainWindow):
             return
         # Library glyphs are black on transparent, so they always need a theme tint.
         self._icon_color = QColor(DEFAULT_ICON_COLOR)
+        self._library_member = member
         self._set_icon(pixmap, name)
 
     def closeEvent(self, event):
@@ -1191,6 +1318,7 @@ class IconStudio(DragToMoveMixin, QMainWindow):
 
     def _load_default_icon(self, initial_path=None, initial_icon=None):
         """Open with the current icon, or the rocket for a new command."""
+        self._library_member = None
         if initial_icon is not None and not initial_icon.isNull():
             pixmap = initial_icon.pixmap(QSize(WORK_RENDER_SIZE, WORK_RENDER_SIZE))
             if not pixmap.isNull():

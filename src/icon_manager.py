@@ -25,6 +25,21 @@ def get_user_icon_dir():
     return app_data
 
 
+def command_icon_stem(command_name) -> str:
+    """File-safe stem for a command's icon files."""
+    stem = re.sub(r"[^A-Za-z0-9._-]+", "_", str(command_name).strip()).strip("._")
+    return stem or "command"
+
+
+def command_source_icon_path(command_name) -> Path:
+    """Where a command's untinted source artwork lives (icons picked from disk).
+
+    Kept beside the rendered icon so the recipe can be re-rendered and
+    re-edited later; library glyphs need no source file.
+    """
+    return get_user_icon_dir() / f"{command_icon_stem(command_name)}.source.png"
+
+
 class IconManager:
     def __init__(self, settings):
         self.settings = settings
@@ -105,8 +120,29 @@ class IconManager:
         return self.settings.paths.default_command_icon
 
     def command_icon_path(self, command_name):
-        stem = re.sub(r"[^A-Za-z0-9._-]+", "_", str(command_name).strip()).strip("._")
-        return self.icon_store_dir / f"{stem or 'command'}.png"
+        return self.icon_store_dir / f"{command_icon_stem(command_name)}.png"
+
+    def command_source_icon_path(self, command_name):
+        return command_source_icon_path(command_name)
+
+    def render_recipe_icon(self, command):
+        """Render a command's icon recipe to its icon file, returning the path.
+
+        Used when the rendered PNG is missing, e.g. right after an import.
+        Returns None if the command has no recipe or it cannot be rendered.
+        """
+        from .icon_browser import recipe_from_command, render_recipe
+
+        recipe = recipe_from_command(command)
+        if recipe is None:
+            return None
+        pixmap = render_recipe(recipe)
+        if pixmap is None or pixmap.isNull():
+            return None
+        icon_path = self.command_icon_path(command.get("name", ""))
+        if not pixmap.save(str(icon_path), "PNG"):
+            return None
+        return str(icon_path)
 
     def save_command_icon(self, icon, command_name, size=256):
         """Persist a resolved QIcon/QPixmap as this command's permanent icon.
@@ -225,6 +261,10 @@ class IconManager:
             if not icon.isNull():
                 return icon
 
+        rendered = self.render_recipe_icon(command)
+        if rendered:
+            return QIcon(rendered)
+
         if icon_path and icon_path in self.bundled_icons:
             icon = QIcon(self.bundled_icons[icon_path])
             if not icon.isNull():
@@ -272,6 +312,11 @@ class IconManager:
 
         if icon_path and os.path.exists(icon_path):
             return icon_path
+
+        # A recipe beats every derived icon: it is what the user chose.
+        rendered = self.render_recipe_icon(command)
+        if rendered:
+            return rendered
 
         if icon_path and icon_path in self.bundled_icons:
             return self.bundled_icons[icon_path]

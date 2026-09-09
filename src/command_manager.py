@@ -1,3 +1,4 @@
+import base64
 import json
 import os
 import tomllib
@@ -7,6 +8,7 @@ from typing import TYPE_CHECKING
 from urllib.parse import urlparse
 
 from .command_trie import CommandTrie
+from .icon_manager import command_source_icon_path
 from .settings import Settings, toml_str, toml_value
 
 if TYPE_CHECKING:  # pragma: no cover - type hints only, keeps the GUI out of this module
@@ -14,6 +16,16 @@ if TYPE_CHECKING:  # pragma: no cover - type hints only, keeps the GUI out of th
 
 
 RUN_COUNTS_FILENAME = "run_counts.json"
+
+# What made a command's icon (see icon_browser recipes). Stored next to the
+# rendered `icon` path so the icon can be re-edited exactly and exported.
+ICON_RECIPE_KEYS = ("icon_glyph", "icon_source", "icon_color", "icon_background")
+# Export-only: a disk source image travels as base64 under this key.
+ICON_SOURCE_DATA_KEY = "icon_source_data"
+
+
+def _recipe_fields(command: dict) -> dict:
+    return {key: str(command[key]) for key in ICON_RECIPE_KEYS if command.get(key)}
 
 
 def _serialize_command(cmd: dict) -> str:
@@ -25,6 +37,9 @@ def _serialize_command(cmd: dict) -> str:
     lines.append(f"description = {toml_str(cmd.get('description', ''))}")
     if cmd.get("icon"):
         lines.append(f"icon = {toml_str(cmd['icon'])}")
+    for key in (*ICON_RECIPE_KEYS, ICON_SOURCE_DATA_KEY):
+        if cmd.get(key):
+            lines.append(f"{key} = {toml_str(cmd[key])}")
     return "\n".join(lines) + "\n"
 
 
@@ -105,6 +120,23 @@ class CommandManager:
             self._save_run_counts()
         return next_count
 
+    def reset_run_count(self, name: str) -> None:
+        """Set one command's execution count back to zero."""
+        cmd = self.commands.get(name)
+        if cmd is not None:
+            cmd["times_executed"] = 0
+        if self.run_counts.pop(name, None) is not None:
+            self._save_run_counts()
+
+    def reset_all_run_counts(self) -> int:
+        """Clear every execution count. Returns how many commands had one."""
+        cleared = len(self.run_counts)
+        for cmd in self.commands.values():
+            cmd["times_executed"] = 0
+        self.run_counts = {}
+        self._save_run_counts()
+        return cleared
+
     # --------------------------------------------------------------- loading
 
     def _load_commands_from_file(self):
@@ -156,6 +188,7 @@ class CommandManager:
                 "location": location,
                 "times_executed": self.run_counts.get(str(name), 0),
                 "_path": Path(location).expanduser() if cmd_type == "file" else None,
+                **_recipe_fields(cmd_data),
             }
 
             commands[name] = command_obj
@@ -279,6 +312,7 @@ class CommandManager:
             "location": command.get("location", ""),
             "description": command.get("description", ""),
             "type": command.get("type", "file"),
+            **_recipe_fields(command),
         }
         if command.get("icon"):
             entry["icon"] = command["icon"]
@@ -323,7 +357,18 @@ class CommandManager:
             if self.validate_command(candidate):
                 skipped.append(candidate.get("name", ""))
                 continue
-            commands.append(candidate)
+            entry = {
+                "name": candidate["name"],
+                "aliases": list(candidate.get("aliases", [])),
+                "location": candidate.get("location", ""),
+                "description": candidate.get("description", ""),
+                "type": candidate.get("type", "file"),
+                **_recipe_fields(candidate),
+            }
+            if candidate.get("icon"):
+                # Set when the user styled the program in the editor before adding it.
+                entry["icon"] = candidate["icon"]
+            commands.append(entry)
             existing_locations.add(location)
             imported.append(candidate["name"])
 
@@ -343,11 +388,55 @@ class CommandManager:
             return location
         return str(Path("~") / relative)
 
+    @staticmethod
+    def _portable_recipe(cmd: dict) -> dict:
+        """Recipe fields for export: a library glyph travels as its name, a
+        disk source image is embedded as base64 so it can be rebuilt anywhere."""
+        fields = {key: cmd[key] for key in ("icon_glyph", "icon_color", "icon_background") if cmd.get(key)}
+        source = cmd.get("icon_source")
+        if source and not fields.get("icon_glyph"):
+            try:
+                fields[ICON_SOURCE_DATA_KEY] = base64.b64encode(Path(str(source)).read_bytes()).decode("ascii")
+            except OSError:
+                pass
+        return fields
+
+    @staticmethod
+    def _materialize_recipe(candidate: dict) -> dict:
+        """Recipe fields for storing an imported command: embedded source
+        image bytes are written into the icon store and referenced by path."""
+        fields = {key: candidate[key] for key in ("icon_glyph", "icon_color", "icon_background") if candidate.get(key)}
+        if candidate.get("icon_source") and Path(str(candidate["icon_source"])).exists():
+            fields["icon_source"] = str(candidate["icon_source"])
+        elif candidate.get(ICON_SOURCE_DATA_KEY) and not fields.get("icon_glyph"):
+            try:
+                source_path = command_source_icon_path(candidate.get("name", ""))
+                source_path.write_bytes(base64.b64decode(candidate[ICON_SOURCE_DATA_KEY]))
+                fields["icon_source"] = str(source_path)
+            except (OSError, ValueError):
+                pass
+        return fields
+
+    def materialize_candidate_source(self, candidate: dict) -> None:
+        """Give an import candidate with embedded source bytes a real source file.
+
+        Done before the candidate is opened in the editor, so the editor sees
+        an ordinary recipe it can preview and keep rather than opaque bytes.
+        """
+        if candidate.get("icon_glyph") or candidate.get("icon_source") or not candidate.get(ICON_SOURCE_DATA_KEY):
+            return
+        fields = self._materialize_recipe(candidate)
+        if fields.get("icon_source"):
+            candidate["icon_source"] = fields["icon_source"]
+            candidate.pop(ICON_SOURCE_DATA_KEY, None)
+
     def export_commands(self, names: list[str], file_path: Path) -> int:
         """Write selected user commands to a portable TOML file for sharing.
 
-        Icons are dropped since they're specific to this machine; paths under
-        the user's home directory are generalized to '~'.
+        Rendered icon paths are dropped since they're specific to this
+        machine, but icon recipes travel: library glyphs by name, disk
+        artwork embedded. Paths under the user's home directory are
+        generalized to '~'.
         """
         commands = self._read_raw_commands()
         selected = [c for c in commands if c.get("name") in names]
@@ -362,6 +451,7 @@ class CommandManager:
                 "location": location if cmd_type == "url" else self._generalize_path(location),
                 "description": cmd.get("description", ""),
                 "type": cmd_type,
+                **self._portable_recipe(cmd),
             }
             portable.append(entry)
 
@@ -415,6 +505,9 @@ class CommandManager:
                 "description": cmd_data.get("description", ""),
                 "type": cmd_type,
             }
+            for key in (*ICON_RECIPE_KEYS, ICON_SOURCE_DATA_KEY):
+                if cmd_data.get(key):
+                    candidate[key] = str(cmd_data[key])
             candidate["_error"], candidate["_conflict"] = self.check_import_candidate(candidate)
             candidates.append(candidate)
 
@@ -455,6 +548,7 @@ class CommandManager:
                 "location": location,
                 "description": candidate.get("description", ""),
                 "type": cmd_type,
+                **self._materialize_recipe(candidate),
             }
             if candidate.get("icon"):
                 # Set when the user styled the command in the editor before importing.
@@ -526,10 +620,17 @@ class CommandManager:
     # -------------------------------------------------------------- searching
 
     def find_matching_commands(self, text: str) -> list[dict]:
-        """Return the commands whose name or alias starts with `text`, sorted by name."""
+        """Return the commands whose name or alias starts with `text`.
+
+        Ordered by the `sort_results` setting: most-run first (ties broken by
+        name) or purely by name. Counts are always tracked, so switching to
+        popularity later still reflects past use.
+        """
         max_results = self.settings.search.max_results
         command_names = self.lookup_trie.search_prefix(text, max_results=max_results)
         results = [self.commands[name] for name in command_names if name in self.commands]
+        if self.settings.search.sort_results == "popularity":
+            return sorted(results, key=lambda x: (-_safe_run_count(x.get("times_executed")), x["name"].lower()))
         return sorted(results, key=lambda x: x["name"].lower())
 
     def get_matching_commands(self, main_window: "MainWindow", text):

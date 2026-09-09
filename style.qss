@@ -477,6 +477,53 @@ QCheckBox::indicator:checked {
     border: 1px solid #7aa2f7;
 }
 
+/* ----------------------------------------------------------- combo boxes -- */
+
+QComboBox {
+    background: #1e2025;
+    color: #e7e9ee;
+    border: 1px solid #353942;
+    border-radius: 8px;
+    padding: 8px 34px 8px 10px;
+    font-size: 13px;
+}
+
+QComboBox:focus {
+    border-color: #7aa2f7;
+}
+
+QComboBox::drop-down {
+    subcontrol-origin: padding;
+    subcontrol-position: top right;
+    width: 24px;
+    background: #2d7dff;
+    border: none;
+    border-left: 1px solid #1f5fca;
+    border-top-right-radius: 7px;
+    border-bottom-right-radius: 7px;
+}
+
+QComboBox::drop-down:hover {
+    background: #4b91ff;
+}
+
+QComboBox::down-arrow {
+    image: url(assets/icons/spinbox-arrow-down.svg);
+    width: 10px;
+    height: 6px;
+}
+
+QComboBox QAbstractItemView {
+    background: #1e2025;
+    color: #e7e9ee;
+    border: 1px solid #353942;
+    border-radius: 6px;
+    padding: 4px;
+    outline: none;
+    selection-background-color: #343841;
+    selection-color: #f3f4f7;
+}
+
 /* ------------------------------------------------------------- spinboxes -- */
 
 QSpinBox,

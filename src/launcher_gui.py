@@ -800,6 +800,7 @@ class MainWindow(QMainWindow):
         panel.importProgramsRequested.connect(self.choose_recent_programs)
         panel.exportCommandsRequested.connect(self.export_commands)
         panel.importCommandsRequested.connect(self.import_commands)
+        panel.resetRunCountsRequested.connect(self.reset_all_run_counts)
         self._editor_panel = panel
         self.view_stack.addWidget(panel)
         self.view_stack.setCurrentWidget(panel)
@@ -1023,7 +1024,7 @@ class MainWindow(QMainWindow):
 
         existing_locations = self.cmd_manager.existing_command_locations()
         candidates = filter_new_program_commands(candidates, existing_locations)
-        dialog = ProgramImportDialog(candidates, existing_locations, self.icon_manager, self)
+        dialog = ProgramImportDialog(candidates, existing_locations, self.icon_manager, self, command_manager=self.cmd_manager)
         if dialog.exec() != dialog.DialogCode.Accepted:
             return
 
@@ -1101,6 +1102,28 @@ class MainWindow(QMainWindow):
             self.cmd_manager.get_matching_commands(self, self.user_text)
         else:
             self._clear_and_hide_results()
+
+    def reset_all_run_counts(self):
+        """Clear every command's run count after confirmation."""
+        tracked = sum(1 for count in self.cmd_manager.run_counts.values() if count > 0)
+        if tracked == 0:
+            QMessageBox.information(self, "Reset Run Counts", "No commands have been run yet.")
+            return
+
+        message_box = QMessageBox(self)
+        message_box.setWindowTitle("Reset Run Counts")
+        message_box.setIcon(QMessageBox.Icon.Question)
+        message_box.setText(f"Reset the run count of {tracked} command{'s' if tracked != 1 else ''} to zero?")
+        message_box.setInformativeText("Results sorted by popularity will start from scratch. This cannot be undone.")
+        reset_button = message_box.addButton("Reset", QMessageBox.ButtonRole.DestructiveRole)
+        message_box.addButton(QMessageBox.StandardButton.Cancel)
+        message_box.exec()
+        if message_box.clickedButton() is not reset_button:
+            return
+
+        self.cmd_manager.reset_all_run_counts()
+        if self.user_text:
+            self.cmd_manager.get_matching_commands(self, self.user_text)
 
     def open_editor(self, command):
         """Swap the search view for the command editor panel."""
