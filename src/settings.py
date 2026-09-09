@@ -1,16 +1,49 @@
 # src/settings.py
 import tomllib
-import json
 import shutil
 import sys
 from pathlib import Path
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, fields
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_SETTINGS_PATH = PROJECT_ROOT / "config" / "settings.default.toml"
 
 with DEFAULT_SETTINGS_PATH.open("rb") as default_settings_file:
     DEFAULT_SETTINGS = tomllib.load(default_settings_file)
+
+
+def toml_str(value) -> str:
+    """Serialize a string as TOML, preferring the literal form for paths.
+
+    Literal (single-quoted) strings need no escaping, which keeps Windows
+    paths readable. Anything containing a single quote or a newline falls
+    back to a basic (double-quoted) string with escapes.
+    """
+    text = str(value)
+    if "'" not in text and "\n" not in text and "\r" not in text:
+        return f"'{text}'"
+    escaped = text.replace("\\", "\\\\").replace('"', '\\"').replace("\r", "\\r").replace("\n", "\\n")
+    return f'"{escaped}"'
+
+
+def toml_value(value) -> str:
+    if isinstance(value, bool):
+        return str(value).lower()
+    if isinstance(value, (int, float)):
+        return str(value)
+    if isinstance(value, (list, tuple)):
+        return "[" + ", ".join(toml_value(item) for item in value) + "]"
+    return toml_str(value)
+
+
+def _from_section(cls, data: dict):
+    """Build a settings dataclass, ignoring keys it no longer knows about.
+
+    Settings files written by older or newer versions of Dash may carry keys
+    this version does not have; they should not stop the app from starting.
+    """
+    known = {f.name for f in fields(cls)}
+    return cls(**{key: value for key, value in data.items() if key in known})
 
 
 @dataclass
@@ -42,6 +75,7 @@ class SearchSettings:
     max_results: int = DEFAULT_SETTINGS["search"]["max_results"]
     autocomplete: bool = DEFAULT_SETTINGS["search"]["autocomplete"]
     show_descriptions: bool = DEFAULT_SETTINGS["search"]["show_descriptions"]
+    show_run_counter: bool = DEFAULT_SETTINGS["search"]["show_run_counter"]
     show_command_tree: bool = DEFAULT_SETTINGS["search"]["show_command_tree"]
 
 
@@ -53,13 +87,11 @@ class ShortcutSettings:
 
 @dataclass
 class PathSettings:
-    scripts_folder: str = DEFAULT_SETTINGS["paths"]["scripts_folder"]
     program_icon: str = DEFAULT_SETTINGS["paths"]["program_icon"]
     default_command_icon: str = DEFAULT_SETTINGS["paths"]["default_command_icon"]
     folder_icon: str = DEFAULT_SETTINGS["paths"]["folder_icon"]
     file_icon: str = DEFAULT_SETTINGS["paths"]["file_icon"]
     url_command_icon: str = DEFAULT_SETTINGS["paths"]["url_command_icon"]
-    cache_folder: str = DEFAULT_SETTINGS["paths"]["cache_folder"]
     calculator_icon: str = DEFAULT_SETTINGS["paths"]["calculator_icon"]
     no_result_icon: str = DEFAULT_SETTINGS["paths"]["no_result_icon"]
     settings_command_icons: str = DEFAULT_SETTINGS["paths"]["settings_command_icons"]
@@ -121,11 +153,11 @@ class Settings:
             data = tomllib.load(f)
 
         settings = cls(
-            general=GeneralSettings(**data.get("general", {})),
-            ui=UISettings(**data.get("ui", {})),
-            search=SearchSettings(**data.get("search", {})),
-            shortcuts=ShortcutSettings(**data.get("shortcuts", {})),
-            paths=PathSettings(**data.get("paths", {})),
+            general=_from_section(GeneralSettings, data.get("general", {})),
+            ui=_from_section(UISettings, data.get("ui", {})),
+            search=_from_section(SearchSettings, data.get("search", {})),
+            shortcuts=_from_section(ShortcutSettings, data.get("shortcuts", {})),
+            paths=_from_section(PathSettings, data.get("paths", {})),
         )
         return settings.normalize_resource_paths()
 
@@ -149,13 +181,7 @@ class Settings:
         for section, values in sections.items():
             lines.append(f"[{section}]")
             for key, value in values.items():
-                if isinstance(value, bool):
-                    rendered = str(value).lower()
-                elif isinstance(value, (int, float)):
-                    rendered = str(value)
-                else:
-                    rendered = json.dumps(str(value))
-                lines.append(f"{key} = {rendered}")
+                lines.append(f"{key} = {toml_value(value)}")
             lines.append("")
         settings_path.parent.mkdir(parents=True, exist_ok=True)
         settings_path.write_text("\n".join(lines), encoding="utf-8")

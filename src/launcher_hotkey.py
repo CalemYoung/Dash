@@ -1,5 +1,18 @@
+import sys
+
 from PyQt6.QtCore import QObject, pyqtSignal
 from PyHotKey import keyboard, Key
+
+
+def _running_as_admin() -> bool:
+    if sys.platform != "win32":
+        return False
+    try:
+        import ctypes
+
+        return bool(ctypes.windll.shell32.IsUserAnAdmin())
+    except Exception:
+        return False
 
 
 class HotkeyListener(QObject):
@@ -25,6 +38,7 @@ class HotkeyListener(QObject):
             "shift": Key.shift_l,
             "win": Key.cmd_l,
             "cmd": Key.cmd_l,
+            "meta": Key.cmd_l,
             # Special keys
             "enter": Key.enter,
             "return": Key.enter,
@@ -78,8 +92,13 @@ class HotkeyListener(QObject):
         else:
             print(f"Hotkey registered with ID: {self.hotkey_id}")
 
-        # Enable hotkey suppression (requires admin privileges)
+        # Suppressing the hotkey keeps the keystroke from reaching the app that
+        # had focus. PyHotKey can only do that with an elevated process; without
+        # it the flag is silently ignored, so say so once instead of leaving the
+        # behaviour difference unexplained.
         keyboard.suppress_hotkey = True
+        if not _running_as_admin():
+            print("Hotkey suppression unavailable: Dash is not running elevated, so the hotkey also reaches the focused app.")
 
     def on_activate(self):
         """Called when hotkey is activated"""

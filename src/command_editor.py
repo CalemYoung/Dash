@@ -69,6 +69,22 @@ class Alias(QFrame):
         return self.alias_text < other.alias_text
 
 
+class AliasEnterBox(QLineEdit):
+    """Line edit whose Enter key only adds an alias.
+
+    A plain QLineEdit leaves Return unaccepted after emitting returnPressed,
+    so inside a QDialog the key travels on and also clicks the default (Save)
+    button, closing the editor the moment an alias is added.
+    """
+
+    def keyPressEvent(self, event):
+        if event.key() in (Qt.Key.Key_Return, Qt.Key.Key_Enter):
+            self.returnPressed.emit()
+            event.accept()
+            return
+        super().keyPressEvent(event)
+
+
 class AliasBox(QFrame):
     aliasesChanged = pyqtSignal()
 
@@ -87,7 +103,7 @@ class AliasBox(QFrame):
         self.grid_layout.setHorizontalSpacing(8)
         self.grid_layout.setVerticalSpacing(8)
 
-        self.enter_box = QLineEdit()
+        self.enter_box = AliasEnterBox()
         self.enter_box.setObjectName("AliasEnterBox")
         self.enter_box.returnPressed.connect(self.on_enter_pressed)
         self.enter_box.setPlaceholderText("Add alias, press \u21b5")
@@ -367,30 +383,42 @@ class CommandActionEditor(QFrame):
 
 
 class CommandEditorPanel(QFrame):
-    """Full-panel editor for a single command. Saves in the background on exit."""
+    """Full-panel editor for a single command.
+
+    By default Save writes straight to commands.toml through the command
+    manager. With ``standalone=True`` nothing is written: the validated
+    command is emitted on ``saved`` instead, so the same editor can prepare a
+    command that lives somewhere else (an import candidate, for instance).
+    """
 
     # Emitted when the user leaves the editor (after any save/delete).
     closed = pyqtSignal()
+    # Standalone mode only: the edited command, validated but not stored.
+    saved = pyqtSignal(dict)
 
-    def __init__(self, command, icon_manager, cmd_manager, parent=None):
+    def __init__(self, command, icon_manager, cmd_manager, parent=None, *, standalone=False, title=None):
         super().__init__(parent)
         self.setObjectName("CommandEditorPanel")
         editor_mode = "edit" if command else "new"
         self.setProperty("editorMode", editor_mode)
         self.icon_manager = icon_manager
         self.cmd_manager = cmd_manager
+        self._standalone = standalone
         self._command = command or {}
-        self._original_name = self._command.get("name") if command else None
+        # A standalone command is not in commands.toml, so there is no stored
+        # name to exempt from the keyword-conflict checks.
+        self._original_name = self._command.get("name") if command and not standalone else None
         self._resolved_icon = QIcon()
         self._icon_path = self._command.get("icon")
 
         self._initial_name = self._command.get("name", "") if command else ""
+        self._initial_description = self._command.get("description", "") if command else ""
         self._initial_type = CommandType.from_command(self._command) if command else CommandType.APP
         self._initial_location = self._command.get("location", "") if command else ""
         self._initial_aliases = sorted(self._command.get("aliases", [])) if command else []
         self._initial_icon = self._command.get("icon") if command else None
 
-        title = QLabel("Edit Command" if command else "New Command")
+        title = QLabel(title or ("Edit Command" if command else "New Command"))
         title.setObjectName("CommandEditTitle")
         title.setProperty("editorMode", editor_mode)
         title_row = QHBoxLayout()
@@ -424,6 +452,18 @@ class CommandEditorPanel(QFrame):
         command_name_column.addLayout(command_name_row)
         command_name_column.addWidget(self.validation_message)
 
+        self.command_description_edit_box = QLineEdit()
+        self.command_description_edit_box.setObjectName("CommandDescriptionEditBox")
+        self.command_description_edit_box.setPlaceholderText("Description")
+
+        command_description_column = QVBoxLayout()
+        command_description_column.setContentsMargins(0, 0, 0, 0)
+        command_description_column.setSpacing(2)
+        command_description_label = QLabel("Description")
+        command_description_label.setObjectName("fieldLabel")
+        command_description_column.addWidget(command_description_label)
+        command_description_column.addWidget(self.command_description_edit_box)
+
         command_type_row_label = QLabel("Command type")
         command_type_row_label.setObjectName("fieldLabel")
         start_type = CommandType.from_command(self._command) if command else CommandType.APP
@@ -439,7 +479,8 @@ class CommandEditorPanel(QFrame):
         self.delete_command_btn.setText("Delete command")
         self.delete_command_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self.delete_command_btn.clicked.connect(self._delete_and_close)
-        self.delete_command_btn.setVisible(command is not None)
+        # Deleting only makes sense for a command that is actually stored.
+        self.delete_command_btn.setVisible(command is not None and not standalone)
         self.close_button = QPushButton("Close")
         self.close_button.setCursor(Qt.CursorShape.PointingHandCursor)
         self.close_button.clicked.connect(self._cancel_and_close)
@@ -462,6 +503,7 @@ class CommandEditorPanel(QFrame):
         layout.setSpacing(14)
         layout.addLayout(title_row)
         layout.addLayout(command_name_column)
+        layout.addLayout(command_description_column)
         layout.addSpacing(6)
         layout.addLayout(command_type_row)
 
@@ -491,6 +533,7 @@ class CommandEditorPanel(QFrame):
         self._populate(self._command)
 
         self.command_name_edit_box.textChanged.connect(self._update_dirty_state)
+        self.command_description_edit_box.textChanged.connect(self._update_dirty_state)
         self.command_type_selector.typeChanged.connect(self._update_dirty_state)
         self.command_action.command_action_edit_box.textChanged.connect(self._update_dirty_state)
         self.alias_box.aliasesChanged.connect(self._update_dirty_state)
@@ -498,7 +541,7 @@ class CommandEditorPanel(QFrame):
 
         # Explicit tab order so focus follows the visual top-to-bottom flow.
         # Hidden widgets are skipped: Qt warns if they're in the chain.
-        order = [self.command_name_edit_box]
+        order = [self.command_name_edit_box, self.command_description_edit_box]
         order += [self.command_type_selector.buttons[t] for t in CommandType]
         order += [
             self.command_action.command_action_edit_box,
@@ -518,6 +561,7 @@ class CommandEditorPanel(QFrame):
         if not command:
             return
         self.command_name_edit_box.setText(command.get("name", ""))
+        self.command_description_edit_box.setText(command.get("description", ""))
         self.command_action.command_action_edit_box.setText(command.get("location", ""))
         self.alias_box.set_aliases(command.get("aliases", []))
         icon_path = command.get("icon")
@@ -540,6 +584,7 @@ class CommandEditorPanel(QFrame):
         ):
             return False
         current_name = self.command_name_edit_box.text().strip()
+        current_description = self.command_description_edit_box.text().strip()
         current_type = self.command_type_selector.selection
         current_location = self.command_action.command_action_edit_box.text().strip()
         current_aliases = sorted([a.alias_text for a in self.alias_box.aliases])
@@ -547,6 +592,7 @@ class CommandEditorPanel(QFrame):
 
         return (
             current_name != self._initial_name
+            or current_description != self._initial_description
             or current_type != self._initial_type
             or current_location != self._initial_location
             or current_aliases != self._initial_aliases
@@ -569,9 +615,21 @@ class CommandEditorPanel(QFrame):
 
     def keyPressEvent(self, event):
         if event.key() == Qt.Key.Key_Escape:
-            self._cancel_and_close()
+            self._leave()
         else:
             super().keyPressEvent(event)
+
+    def _leave(self):
+        """Escape: keep valid edits rather than dropping them on the floor.
+
+        A clean editor just closes. A dirty one saves if the command validates;
+        if it does not, the error is shown and the editor stays open so nothing
+        is lost. The Cancel button remains the explicit way to discard.
+        """
+        if not self._is_dirty():
+            self.closed.emit()
+            return
+        self._save_and_close()
 
     def _collect(self) -> dict | None:
         name = self.command_name_edit_box.text().strip()
@@ -582,11 +640,10 @@ class CommandEditorPanel(QFrame):
             "name": name,
             "aliases": [a.alias_text for a in self.alias_box.aliases],
             "location": self.command_action.command_action_edit_box.text().strip(),
-            "description": self._command.get("description", ""),
+            "description": self.command_description_edit_box.text().strip(),
             "icon": self._icon_path,
             "type": command_type.to_stored_type(),
             "command_type": command_type.name.lower(),
-            "times_executed": self._command.get("times_executed", 0),
         }
 
     def _save_and_close(self):
@@ -598,7 +655,10 @@ class CommandEditorPanel(QFrame):
         if entry is not None:
             if entry["icon"] is None and not self._resolved_icon.isNull():
                 entry["icon"] = self.icon_manager.save_command_icon(self._resolved_icon, entry["name"])
-            self.cmd_manager.save_command(entry, original_name=self._original_name)
+            if self._standalone:
+                self.saved.emit(entry)
+            else:
+                self.cmd_manager.save_command(entry, original_name=self._original_name)
         self.closed.emit()
 
     def _validate_new_alias(self, alias: str) -> str | None:

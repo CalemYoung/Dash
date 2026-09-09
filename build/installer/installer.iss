@@ -2,7 +2,12 @@
 ; Calem Young
 
 #define MyAppName "Dash"
-#define MyAppVersion "2.2.2"
+; The version is supplied by build/scripts/build_installer.py from
+; build/installer/version.txt via ISCC /DMyAppVersion=<version>. The fallback
+; below only applies when this script is compiled directly.
+#ifndef MyAppVersion
+  #define MyAppVersion "0.0.0"
+#endif
 #define MyAppPublisher "Calem Young"
 #define MyAppURL "https://github.com/calemyoung/Dash"
 #define MyAppExeName "Dash.exe"
@@ -47,7 +52,7 @@ PrivilegesRequiredOverridesAllowed=dialog
 VersionInfoVersion={#MyAppVersion}
 VersionInfoCompany={#MyAppPublisher}
 VersionInfoDescription={#MyAppDescription}
-VersionInfoCopyright=Copyright (C) 2024 {#MyAppPublisher}
+VersionInfoCopyright=Copyright (C) 2025 {#MyAppPublisher}
 VersionInfoProductName={#MyAppName}
 VersionInfoProductVersion={#MyAppVersion}
 
@@ -83,7 +88,6 @@ Source: "..\..\config\commands.default.toml"; DestDir: "{app}\config"; DestName:
 ; Create AppData directories
 Name: "{userappdata}\{#MyAppName}"; Flags: uninsneveruninstall
 Name: "{userappdata}\{#MyAppName}\config"; Flags: uninsneveruninstall
-Name: "{userappdata}\{#MyAppName}\assets\cache"; Flags: uninsneveruninstall
 Name: "{userappdata}\{#MyAppName}\assets\icons"; Flags: uninsneveruninstall
 
 [Icons]
@@ -128,14 +132,13 @@ end;
 // Copy default configs to AppData if they don't exist
 procedure CurStepChanged(CurStep: TSetupStep);
 var
-  SettingsPath, CommandsPath, CachePath, IconsPath, ConfigPath: String;
+  SettingsPath, CommandsPath, IconsPath, ConfigPath: String;
 begin
   if CurStep = ssPostInstall then
   begin
     ConfigPath := AppDataPath + '\config';
     SettingsPath := ConfigPath + '\settings.toml';
     CommandsPath := ConfigPath + '\commands.toml';
-    CachePath := AppDataPath + '\assets\cache';
     IconsPath := AppDataPath + '\assets\icons';
     
     // Create config directory first
@@ -163,15 +166,6 @@ begin
         Log('Created default commands.toml in AppData')
       else
         Log('Failed to create commands.toml in AppData');
-    end;
-    
-    // Create cache directory
-    if not DirExists(CachePath) then
-    begin
-      if CreateDir(CachePath) then
-        Log('Created cache directory')
-      else
-        Log('Failed to create cache directory');
     end;
     
     // Create custom icons directory

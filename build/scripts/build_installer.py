@@ -1,22 +1,29 @@
 """
 Build script for Dash
 Builds executable and creates installer
+
+The version comes from build/installer/version.txt and nowhere else. This
+script generates the PyInstaller version resource from it and passes it to
+Inno Setup on the command line, so no committed file has to be rewritten.
 """
 
 import shutil
 import subprocess
 from pathlib import Path
 import sys
-import re
+
+PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
+VERSION_FILE = PROJECT_ROOT / "build" / "installer" / "version.txt"
+VERSION_INFO_FILE = PROJECT_ROOT / "build" / "installer" / "version_info.txt"
+INSTALLER_SCRIPT = PROJECT_ROOT / "build" / "installer" / "installer.iss"
+DIST_DIR = PROJECT_ROOT / "dist"
 
 
 def clean_build_folders():
     """Remove previous build artifacts"""
     print("Cleaning previous builds...")
-    folders_to_clean = ["build/temp", "dist"]
-
-    for folder in folders_to_clean:
-        folder_path = Path(folder)
+    for folder in ("build/temp", "dist"):
+        folder_path = PROJECT_ROOT / folder
         if folder_path.exists():
             shutil.rmtree(folder_path)
             print(f"   Removed {folder}/")
@@ -28,7 +35,11 @@ def build_executable():
     print("Building executable with PyInstaller...")
     try:
         # Use sys.executable so the build always uses the interpreter that has PyQt6 installed
-        subprocess.run([sys.executable, "-m", "PyInstaller", "dash.spec", "--clean", "--workpath=build/temp"], check=True)
+        subprocess.run(
+            [sys.executable, "-m", "PyInstaller", "dash.spec", "--clean", "--workpath=build/temp"],
+            check=True,
+            cwd=PROJECT_ROOT,
+        )
         print("Executable built successfully!\n")
         return True
     except subprocess.CalledProcessError as e:
@@ -39,24 +50,19 @@ def build_executable():
         return False
 
 
-def update_version_files(version):
-    """Update version in all build files"""
-    print(f"Setting version to {version}...")
+def write_version_info(version):
+    """Generate the Windows version resource PyInstaller embeds in Dash.exe.
 
-    # Update dash.py
-    dash_path = Path("dash.py")
-    content = dash_path.read_text()
-    content = re.sub(r'__version__\s*=\s*".*"', f'__version__ = "{version}"', content)
-    dash_path.write_text(content)
+    The output is ignored by git; it is derived entirely from version.txt.
+    """
+    print(f"Generating version resource for {version}...")
 
-    # Parse version
     version_parts = version.split(".")
     while len(version_parts) < 4:
         version_parts.append("0")
     version_tuple = ", ".join(version_parts[:4])
     version_str = ".".join(version_parts[:4])
 
-    # Generate version_info.txt
     version_info = f"""# UTF-8
 VSVersionInfo(
   ffi=FixedFileInfo(
@@ -88,46 +94,45 @@ VSVersionInfo(
   ]
 )
 """
-    Path("build/installer/version_info.txt").write_text(version_info)
-
-    # Update installer.iss
-    iss_path = Path("build/installer/installer.iss")
-    content = iss_path.read_text()
-    content = re.sub(r'#define MyAppVersion ".*"', f'#define MyAppVersion "{version}"', content)
-    iss_path.write_text(content)
-    print("Version files updated\n")
+    VERSION_INFO_FILE.write_text(version_info, encoding="utf-8")
+    print("Version resource written\n")
 
 
 def get_version():
     """Read version from version.txt"""
-    return Path("build/installer/version.txt").read_text().strip()
+    return VERSION_FILE.read_text(encoding="utf-8").strip()
 
 
-def build_installer():
-    print("Creating installer with Inno Setup...")
-
-    # Common Inno Setup installation paths
-    inno_paths = [
+def find_inno_setup():
+    """Locate ISCC.exe from the common Inno Setup install locations."""
+    candidates = [
         r"C:\Program Files (x86)\Inno Setup 6\ISCC.exe",
         r"C:\Program Files\Inno Setup 6\ISCC.exe",
         r"C:\Program Files (x86)\Inno Setup 5\ISCC.exe",
         r"C:\Program Files\Inno Setup 5\ISCC.exe",
     ]
-
-    inno_setup_path = None
-    for path in inno_paths:
+    for path in candidates:
         if Path(path).exists():
-            inno_setup_path = path
-            break
+            return path
+    return shutil.which("ISCC")
 
+
+def build_installer(version):
+    print("Creating installer with Inno Setup...")
+
+    inno_setup_path = find_inno_setup()
     if not inno_setup_path:
         print("Inno Setup not found!")
         print("   Download from: https://jrsoftware.org/isinfo.php")
-        print("   Or skip installer and use the exe from build/dist/Dash/\n")
+        print("   Or skip installer and use the exe from dist/dash/\n")
         return False
 
     try:
-        subprocess.run([inno_setup_path, "build/installer/installer.iss"], check=True)
+        subprocess.run(
+            [inno_setup_path, f"/DMyAppVersion={version}", str(INSTALLER_SCRIPT)],
+            check=True,
+            cwd=PROJECT_ROOT,
+        )
         print("Installer created successfully!\n")
         return True
     except subprocess.CalledProcessError as e:
@@ -141,10 +146,10 @@ def main():
     print("=" * 60)
     print()
 
-    version = get_version()  # Get version first
+    version = get_version()
 
-    # Step 1: Update version files
-    update_version_files(version)
+    # Step 1: Derive the exe version resource
+    write_version_info(version)
 
     # Step 2: Clean
     clean_build_folders()
@@ -155,25 +160,25 @@ def main():
         sys.exit(1)
 
     # Step 4: Build installer
-    installer_success = build_installer()
+    installer_success = build_installer(version)
 
     # Summary
     print("=" * 60)
     print("Build Summary")
     print("=" * 60)
 
-    exe_path = Path("dist/Dash/Dash.exe")
+    exe_path = DIST_DIR / "dash" / "Dash.exe"
     if exe_path.exists():
-        print(f"Executable: {exe_path.absolute()}")
+        print(f"Executable: {exe_path}")
 
-    installer_path = Path(f"dist/DashSetup-{version}.exe")  # Use version here
+    installer_path = DIST_DIR / f"DashSetup-{version}.exe"
     if installer_success and installer_path.exists():
-        print(f"Installer:  {installer_path.absolute()}")
+        print(f"Installer:  {installer_path}")
         print()
-        print(f"Ready to ship: DashSetup-{version}.exe")  # And here
+        print(f"Ready to ship: DashSetup-{version}.exe")
     else:
         print()
-        print("You can distribute the folder: dist/Dash/")
+        print("You can distribute the folder: dist/dash/")
         print("   (Contains portable version)")
 
     print()
@@ -189,7 +194,9 @@ To release a new version:
 
 1. Update version in: build/installer/version.txt
 
-2. Run: python build/scripts/build_installer.py
+2. Commit, then tag it `v<version>` and push the tag. GitHub Actions builds
+   the installer and attaches it to the release.
 
-3. Distribute: dist/DashSetup-x.x.x.exe
+   For a local build instead: python build/scripts/build_installer.py
+   and distribute dist/DashSetup-<version>.exe
 """

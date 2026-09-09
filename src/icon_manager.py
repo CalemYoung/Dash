@@ -40,6 +40,16 @@ class IconManager:
         location = command_config.get("location", "")
         cmd_type = command_config.get("type", "")
 
+        is_url = cmd_type == "url" or location.startswith(("http://", "https://"))
+
+        # A URL command that was saved with the shared placeholder icon is one
+        # whose favicon had not finished downloading yet. If it has arrived
+        # since, prefer it over the placeholder.
+        if is_url and self.is_shared_default_icon(icon):
+            cached_favicon = self._check_favicon_cache(location)
+            if cached_favicon:
+                return cached_favicon
+
         # Priority order:
         # 1. Absolute path to custom icon
         if icon and os.path.isabs(icon) and os.path.exists(icon):
@@ -71,7 +81,7 @@ class IconManager:
                 return extracted
 
         # 5. Auto-download favicon for URLs (check cache first, download later if needed)
-        if cmd_type == "url" or location.startswith(("http://", "https://")):
+        if is_url:
             cached_favicon = self._check_favicon_cache(location)
             if cached_favicon:
                 print("Loaded favicon icon")
@@ -162,9 +172,6 @@ class IconManager:
         painter.end()
         return canvas
 
-    def cache_icon(self, icon, key, size=256):
-        return self.save_command_icon(icon, key, size)
-
     def delete_command_icon(self, icon_path):
         if not icon_path:
             return
@@ -199,8 +206,10 @@ class IconManager:
     def resolve_command_icon(self, command):
         """Resolve the best available icon for a command as a QIcon.
 
-        Order: existing custom icon file, favicon (urls), OS/shell icon,
-        extracted exe icon, then the type-appropriate default.
+        Order: existing custom icon file, cached favicon (urls), OS/shell icon,
+        extracted exe icon, then the type-appropriate default. Favicons are
+        never downloaded here; a cache miss queues a background download and
+        the URL placeholder is used until it lands.
         """
         from PyQt6.QtGui import QIcon
         from PyQt6.QtCore import QFileInfo
@@ -222,11 +231,13 @@ class IconManager:
                 return icon
 
         if is_url:
-            favicon = self._check_favicon_cache(location) or self._get_favicon_for_url(location)
+            favicon = self._check_favicon_cache(location)
             if favicon:
                 icon = QIcon(favicon)
                 if not icon.isNull():
                     return icon
+            else:
+                self._queue_favicon_download(location)
             return QIcon(self.settings.paths.url_command_icon)
 
         if Path(location).suffix.lower() in ICON_SOURCE_EXTENSIONS and os.path.exists(location):
@@ -266,11 +277,15 @@ class IconManager:
             return self.bundled_icons[icon_path]
 
         if is_url:
-            favicon = self._check_favicon_cache(location) or self._get_favicon_for_url(location)
+            # Cache only: this runs on the GUI thread at startup, so a slow or
+            # unreachable site must not block the launcher from appearing.
+            favicon = self._check_favicon_cache(location)
             if favicon:
                 saved = self.save_command_icon(QIcon(favicon), command.get("name", ""))
                 if saved:
                     return saved
+            else:
+                self._queue_favicon_download(location)
             return self.settings.paths.url_command_icon
 
         path = Path(location).expanduser() if location else None
@@ -401,8 +416,6 @@ class IconManager:
         bundled_icons = {}
 
         # Get icons directory - handle both dev and exe
-        import sys
-
         if hasattr(sys, "_MEIPASS"):
             # Running as compiled exe
             base_path = Path(sys._MEIPASS)  # type: ignore

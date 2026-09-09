@@ -87,7 +87,8 @@ installer to `dist/DashSetup-<version>.exe`.
 
 Releases are built on GitHub's Windows runner. The workflow compiles the
 PyInstaller bundle with Inno Setup, verifies the installer, and attaches it to
-the GitHub Release.
+the GitHub Release. `build/installer/version.txt` is the only
+place the version is stored; the build stamps it into the exe and installer.
 
 1. Update `build/installer/version.txt` to the intended version, such as
    `2.1.0`, and commit it.

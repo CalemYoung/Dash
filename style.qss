@@ -61,6 +61,18 @@
     border-top-right-radius: 0px;
     border-bottom-right-radius: 0px;
     border-bottom-left-radius: 0px;
+    /* Inset so the selected row reads as a card; vertical value must match
+       RESULTS_LIST_PADDING_V in launcher_gui.py. */
+    padding: 4px 6px;
+}
+
+#ResultIconTile {
+    background-color: #2b2f38;
+    border-radius: 10px;
+}
+
+ResultRow[selected="true"] #ResultIconTile {
+    background-color: #3d424d;
 }
 
 #ResultsList::item:selected {
@@ -81,6 +93,22 @@
     font-weight: bold;
 }
 
+/* Usage count: a quiet pill that reads as metadata, not as a third text line. */
+#ResultRunCounterLabel {
+    color: #9299a6;
+    background-color: #2b2f38;
+    border: 1px solid #353942;
+    border-radius: 9px;
+    padding: 1px 8px;
+    margin-right: 4px;
+}
+
+ResultRow[selected="true"] #ResultRunCounterLabel {
+    background-color: #3d424d;
+    border-color: #4a505c;
+    color: #c3c8d1;
+}
+
 #NewCommandButton,
 #ResultEditButton {
     background: transparent;
@@ -92,10 +120,6 @@
 #NewCommandButton:hover,
 #ResultEditButton:hover {
     background: #353942;
-}
-
-#ResultModeLabel {
-    color: #7aa2f7;
 }
 
 #ShortcutHint {

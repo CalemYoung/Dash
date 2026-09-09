@@ -10,7 +10,6 @@ from PyQt6.QtWidgets import (
     QDialogButtonBox,
     QDoubleSpinBox,
     QColorDialog,
-    QFileDialog,
     QFileIconProvider,
     QFormLayout,
     QFrame,
@@ -160,6 +159,56 @@ from .settings import (
 )
 from .installed_programs import filter_new_program_commands
 from .icon_browser import FRAMELESS_DIALOG, DragToMoveMixin
+from .command_editor import CommandEditorPanel
+
+
+class CommandEditDialog(DragToMoveMixin, QDialog):
+    """The command editor in a dialog, for commands that are not stored yet.
+
+    Saving does not touch commands.toml. The result is left in
+    ``result_command`` and the dialog is accepted; Cancel rejects it.
+    """
+
+    def __init__(self, command: dict, command_manager, icon_manager, parent=None, title="Edit Command"):
+        super().__init__(parent)
+        self.setObjectName("CommandEditDialog")
+        self.setWindowTitle(title)
+        self.setWindowFlags(FRAMELESS_DIALOG)
+        # The panel paints its own rounded, bordered surface.
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
+        self.result_command: dict | None = None
+
+        # Pinned, not merely resized: the alias grid sizes itself from its
+        # container, so an unconstrained dialog would grow without bound.
+        settings = icon_manager.settings
+        self.setFixedSize(max(520, settings.ui.program_width), settings.ui.editor_height)
+
+        self.panel = CommandEditorPanel(command, icon_manager, command_manager, self, standalone=True, title=title)
+        self.panel.saved.connect(self._on_saved)
+        self.panel.closed.connect(self._on_closed)
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.addWidget(self.panel)
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        parent = self.parentWidget()
+        if parent is not None:
+            center = parent.frameGeometry().center()
+            self.move(center - self.rect().center())
+        self.raise_()
+        self.activateWindow()
+        self.panel.command_name_edit_box.setFocus()
+
+    def _on_saved(self, command: dict):
+        self.result_command = command
+
+    def _on_closed(self):
+        if self.result_command is not None:
+            self.accept()
+        else:
+            self.reject()
 
 
 class SettingsEditorPanel(QFrame):
@@ -337,6 +386,11 @@ class SettingsEditorPanel(QFrame):
                     self._check(self._settings.search.show_descriptions),
                 ),
                 (
+                    "Show command run counter",
+                    "search.show_run_counter",
+                    self._check(self._settings.search.show_run_counter),
+                ),
+                (
                     "Show command tree",
                     "search.show_command_tree",
                     self._check(self._settings.search.show_command_tree),
@@ -421,6 +475,7 @@ class SettingsEditorPanel(QFrame):
                 max_results=self._value("search.max_results"),
                 autocomplete=self._value("search.autocomplete"),
                 show_descriptions=self._value("search.show_descriptions"),
+                show_run_counter=self._value("search.show_run_counter"),
                 show_command_tree=self._value("search.show_command_tree"),
             ),
             shortcuts=ShortcutSettings(
@@ -673,9 +728,10 @@ class ExportCommandsDialog(DragToMoveMixin, QDialog):
 class ImportCommandsDialog(DragToMoveMixin, QDialog):
     """Review commands parsed from an imported file before adding them.
 
-    Candidates whose target file/folder can't be found are shown disabled
-    with an error message; the user can use "Fix Selected Location..." to
-    manually point at the correct file before it becomes selectable.
+    Any candidate can be opened in the command editor (Edit Selected, or a
+    double-click) to change its name, type, target, aliases, description and
+    icon before it is imported. Candidates whose target can't be found are
+    shown disabled with an error message until they have been fixed that way.
     Candidates that would collide with an existing command are left out
     entirely so existing commands are never overwritten.
     """
@@ -716,10 +772,12 @@ class ImportCommandsDialog(DragToMoveMixin, QDialog):
         empty_message.setObjectName("dialogSubtitle")
         empty_message.setVisible(bool(subtitle))
 
-        fix_button = QPushButton("Fix Selected Location...")
+        fix_button = QPushButton("Edit Selected...")
         fix_button.setObjectName("programImportSelectButton")
         fix_button.setEnabled(bool(importable))
-        fix_button.clicked.connect(self._fix_selected_location)
+        fix_button.setToolTip("Open the selected command in the editor before importing it")
+        fix_button.clicked.connect(self._edit_selected)
+        self.command_list.itemDoubleClicked.connect(lambda _item: self._edit_selected())
 
         select_all_button = QPushButton("Select All Valid")
         select_none_button = QPushButton("Select None")
@@ -765,6 +823,9 @@ class ImportCommandsDialog(DragToMoveMixin, QDialog):
     def _add_item(self, candidate: dict, row: int | None = None):
         error = candidate.get("_error")
         label = f"{candidate.get('name', '')}\n{candidate.get('location', '')}"
+        aliases = [str(alias) for alias in candidate.get("aliases", []) if str(alias).strip()]
+        if aliases:
+            label += "\nAliases: " + ", ".join(aliases)
         if error:
             label += f"\n\u26a0 {error}"
         item = QListWidgetItem(label)
@@ -801,21 +862,36 @@ class ImportCommandsDialog(DragToMoveMixin, QDialog):
     def _update_import_enabled(self, _item=None):
         self._import_button.setEnabled(bool(self.selected_candidates()))
 
-    def _fix_selected_location(self):
+    def _edit_selected(self):
+        """Open the selected candidate in the command editor and apply the result."""
         item = self.command_list.currentItem()
         if item is None:
             return
         candidate = item.data(Qt.ItemDataRole.UserRole)
-        file_path, _ = QFileDialog.getOpenFileName(self, f"Locate '{candidate.get('name', '')}'")
-        if not file_path:
+
+        dialog = CommandEditDialog(candidate, self._command_manager, self._icon_manager, self, title="Edit Import")
+        if dialog.exec() != QDialog.DialogCode.Accepted or dialog.result_command is None:
             return
 
-        candidate["location"] = file_path
-        candidate["_error"] = self._command_manager.validate_target(candidate)
+        edited = dialog.result_command
+        candidate.update(
+            {
+                "name": edited["name"],
+                "aliases": list(edited.get("aliases", [])),
+                "location": edited.get("location", ""),
+                "description": edited.get("description", ""),
+                "type": edited.get("type", "file"),
+                "icon": edited.get("icon"),
+            }
+        )
+        candidate["_error"], candidate["_conflict"] = self._command_manager.check_import_candidate(candidate)
 
         row = self.command_list.row(item)
         self.command_list.takeItem(row)
         new_item = self._add_item(candidate, row=row)
+        if not candidate["_error"] and not candidate["_conflict"]:
+            # The user just prepared this command, so it is meant to be imported.
+            new_item.setCheckState(Qt.CheckState.Checked)
         self.command_list.setCurrentItem(new_item)
         self._update_import_enabled()
 

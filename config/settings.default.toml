@@ -22,6 +22,7 @@ clock_date_text_color = "#9da4b0"
 max_results = 20
 autocomplete = true
 show_descriptions = true
+show_run_counter = true
 show_command_tree = true
 
 [shortcuts]
@@ -29,13 +30,11 @@ edit_selected_command = "Ctrl+Return"
 new_command = "Ctrl+N"
 
 [paths]
-scripts_folder = "assets/scripts"
 program_icon = "assets/icons/icon.png"
 default_command_icon = "assets/icons/icon.png"
 folder_icon = "assets/icons/folder.png"
 file_icon = "assets/icons/file.png"
 url_command_icon = "assets/icons/url.svg"
-cache_folder = "assets/cache"
 calculator_icon = "assets/icons/calculator.png"
 no_result_icon = "assets/icons/no_result.png"
 settings_command_icons = "assets/icons/settings.png"

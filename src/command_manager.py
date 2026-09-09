@@ -1,39 +1,38 @@
-import tomllib
-from pathlib import Path
-from .command_trie import CommandTrie
-from .launcher_gui import MainWindow
+import json
 import os
+import tomllib
 import webbrowser
-import subprocess
+from pathlib import Path
+from typing import TYPE_CHECKING
 from urllib.parse import urlparse
-from .settings import Settings
-from .calculator import eval_expression
-import pyperclip
-from .installed_programs import discover_recent_program_commands
+
+from .command_trie import CommandTrie
+from .settings import Settings, toml_str, toml_value
+
+if TYPE_CHECKING:  # pragma: no cover - type hints only, keeps the GUI out of this module
+    from .launcher_gui import MainWindow
 
 
-def _toml_str(value: str) -> str:
-    """Serialize a string, preferring literal (single-quote) form for paths."""
-    text = str(value)
-    if "'" not in text and "\n" not in text:
-        return f"'{text}'"
-    escaped = text.replace("\\", "\\\\").replace('"', '\\"').replace("\n", "\\n")
-    return f'"{escaped}"'
+RUN_COUNTS_FILENAME = "run_counts.json"
 
 
 def _serialize_command(cmd: dict) -> str:
     """Render a single [[command]] TOML block matching the file's style."""
     lines = ["[[command]]"]
-    lines.append(f'name = "{cmd.get("name", "")}"')
-    aliases = ", ".join(f'"{a}"' for a in cmd.get("aliases", []))
-    lines.append(f"aliases = [{aliases}]")
-    lines.append(f"location = {_toml_str(cmd.get('location', ''))}")
-    lines.append(f'description = "{cmd.get("description", "")}"')
+    lines.append(f"name = {toml_str(cmd.get('name', ''))}")
+    lines.append(f"aliases = {toml_value([str(alias) for alias in cmd.get('aliases', [])])}")
+    lines.append(f"location = {toml_str(cmd.get('location', ''))}")
+    lines.append(f"description = {toml_str(cmd.get('description', ''))}")
     if cmd.get("icon"):
-        lines.append(f"icon = {_toml_str(cmd['icon'])}")
-    if cmd.get("times_executed"):
-        lines.append(f"times_executed = {int(cmd['times_executed'])}")
+        lines.append(f"icon = {toml_str(cmd['icon'])}")
     return "\n".join(lines) + "\n"
+
+
+def _safe_run_count(value) -> int:
+    try:
+        return max(0, int(value))
+    except (TypeError, ValueError):
+        return 0
 
 
 class CommandManager:
@@ -42,6 +41,10 @@ class CommandManager:
         self.settings = settings
         self.commands = {}
         self.lookup_trie = CommandTrie()
+        # Run counts live beside the commands file rather than in it, so that
+        # launching a command never rewrites the user's command definitions.
+        self.run_counts_path = command_file_path.parent / RUN_COUNTS_FILENAME
+        self.run_counts: dict[str, int] = self._load_run_counts()
         self.reload_command_trie()
 
     def _get_system_commands(self):
@@ -56,6 +59,53 @@ class CommandManager:
                 "action": "open_settings",
             },
         ]
+
+    # ------------------------------------------------------------ run counts
+
+    def _load_run_counts(self) -> dict[str, int]:
+        if self.run_counts_path.exists():
+            try:
+                data = json.loads(self.run_counts_path.read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                data = {}
+            if isinstance(data, dict):
+                return {str(name): _safe_run_count(count) for name, count in data.items()}
+            return {}
+
+        # One-time migration: earlier builds kept `times_executed` inside
+        # commands.toml. Carry those over, then the next write drops them.
+        migrated = {}
+        for entry in self._read_raw_commands():
+            count = _safe_run_count(entry.get("times_executed", 0))
+            if count and entry.get("name"):
+                migrated[str(entry["name"])] = count
+        if migrated:
+            self._save_run_counts(migrated)
+        return migrated
+
+    def _save_run_counts(self, counts: dict[str, int] | None = None):
+        counts = self.run_counts if counts is None else counts
+        try:
+            self.run_counts_path.parent.mkdir(parents=True, exist_ok=True)
+            self.run_counts_path.write_text(json.dumps(counts, indent=2, sort_keys=True), encoding="utf-8")
+        except OSError as error:
+            print(f"Could not save run counts: {error}")
+
+    def increment_run_count(self, name: str) -> int:
+        """Increment a command's execution count and return the new value."""
+        cmd = self.commands.get(name)
+        if cmd is None:
+            return 0
+
+        next_count = _safe_run_count(cmd.get("times_executed")) + 1
+        cmd["times_executed"] = next_count
+
+        if cmd.get("type") != "system":
+            self.run_counts[name] = next_count
+            self._save_run_counts()
+        return next_count
+
+    # --------------------------------------------------------------- loading
 
     def _load_commands_from_file(self):
         with self.command_file_path.open("rb") as f:
@@ -91,7 +141,6 @@ class CommandManager:
             name = cmd_data.get("name")
             aliases = cmd_data.get("aliases", [])
             location = cmd_data.get("location", "")
-            times_executed = cmd_data.get("times_executed", 0)
 
             # Auto-detect type
             cmd_type = cmd_data.get("type")
@@ -105,7 +154,7 @@ class CommandManager:
                 "icon": cmd_data.get("icon"),  # Don't set default here - let icon_manager handle it
                 "type": cmd_type,
                 "location": location,
-                "times_executed": times_executed,
+                "times_executed": self.run_counts.get(str(name), 0),
                 "_path": Path(location).expanduser() if cmd_type == "file" else None,
             }
 
@@ -134,6 +183,8 @@ class CommandManager:
             for command in commands
             if command.get("location")
         }
+
+    # ------------------------------------------------------------ validation
 
     def validate_target(self, command: dict) -> str | None:
         """Return an error if a command's location doesn't point at something real."""
@@ -207,11 +258,13 @@ class CommandManager:
                 return f"'{str(keyword).strip()}' is already used by '{owner}'."
         return None
 
+    # ---------------------------------------------------------------- editing
+
     def save_command(self, command: dict, original_name: str | None = None):
         """Insert or update a user command in commands.toml, then reload the trie.
 
-        `command` keys: name, aliases, location, description, icon, type,
-        times_executed. Matching uses `original_name` (for renames) or name.
+        `command` keys: name, aliases, location, description, icon, type.
+        Matching uses `original_name` (for renames) or name.
         """
         error = self.validate_command(command, original_name)
         if error:
@@ -229,8 +282,6 @@ class CommandManager:
         }
         if command.get("icon"):
             entry["icon"] = command["icon"]
-        if command.get("times_executed"):
-            entry["times_executed"] = command["times_executed"]
 
         for i, existing in enumerate(commands):
             if existing.get("name") == match_name:
@@ -239,6 +290,11 @@ class CommandManager:
         else:
             commands.append(entry)
 
+        # A rename keeps its run count.
+        if original_name and original_name != entry["name"] and original_name in self.run_counts:
+            self.run_counts[entry["name"]] = self.run_counts.pop(original_name)
+            self._save_run_counts()
+
         self._write_raw_commands(commands)
         self.reload_command_trie()
 
@@ -246,21 +302,16 @@ class CommandManager:
         """Remove a user command from commands.toml, then reload the trie."""
         commands = [c for c in self._read_raw_commands() if c.get("name") != name]
         self._write_raw_commands(commands)
+        if self.run_counts.pop(name, None) is not None:
+            self._save_run_counts()
         self.reload_command_trie()
 
-    def import_recent_program_commands(self, days: int = 365, max_commands: int | None = None) -> dict:
-        """Discover and append installed programs to commands.toml."""
-        candidates = discover_recent_program_commands(days=days, max_commands=max_commands)
-        return self.import_program_commands(candidates)
+    # ------------------------------------------------------- import / export
 
     def import_program_commands(self, candidates: list[dict]) -> dict:
         """Append selected program candidates without changing existing commands."""
         commands = self._read_raw_commands()
-        existing_locations = {
-            os.path.normcase(os.path.abspath(str(command.get("location", ""))))
-            for command in commands
-            if command.get("location")
-        }
+        existing_locations = self._command_locations(commands)
         imported: list[str] = []
         skipped: list[str] = []
 
@@ -295,8 +346,8 @@ class CommandManager:
     def export_commands(self, names: list[str], file_path: Path) -> int:
         """Write selected user commands to a portable TOML file for sharing.
 
-        Icons and execution counts are dropped since they're specific to this
-        machine; paths under the user's home directory are generalized to '~'.
+        Icons are dropped since they're specific to this machine; paths under
+        the user's home directory are generalized to '~'.
         """
         commands = self._read_raw_commands()
         selected = [c for c in commands if c.get("name") in names]
@@ -318,6 +369,27 @@ class CommandManager:
         file_path.write_text("\n".join(blocks), encoding="utf-8")
         return len(portable)
 
+    def check_import_candidate(self, candidate: dict) -> tuple[str | None, bool]:
+        """Return ``(error, conflict)`` for a command that is not yet stored.
+
+        ``error`` is a validation message if the target is missing or malformed.
+        ``conflict`` is True if the name, an alias, or the location collides
+        with a command that already exists.
+        """
+        existing_commands = self._read_raw_commands()
+        existing_locations = self._command_locations(existing_commands)
+        reserved = self._reserved_keywords(commands=existing_commands)
+
+        error = self.validate_target(candidate)
+
+        name = str(candidate.get("name", "")).strip()
+        keywords = [name, *candidate.get("aliases", [])]
+        is_conflict = any(str(k).strip().casefold() in reserved for k in keywords if str(k).strip())
+        if not is_conflict and candidate.get("type", "file") != "url":
+            normalized = os.path.normcase(os.path.abspath(str(candidate.get("location", ""))))
+            is_conflict = normalized in existing_locations
+        return error, is_conflict
+
     def parse_import_candidates(self, file_path: Path) -> list[dict]:
         """Load candidate commands from an exported TOML file for review before import.
 
@@ -327,10 +399,6 @@ class CommandManager:
         """
         with file_path.open("rb") as f:
             cfg = tomllib.load(f)
-
-        existing_commands = self._read_raw_commands()
-        existing_locations = self._command_locations(existing_commands)
-        reserved = self._reserved_keywords(commands=existing_commands)
 
         candidates = []
         for cmd_data in cfg.get("command", []):
@@ -347,16 +415,7 @@ class CommandManager:
                 "description": cmd_data.get("description", ""),
                 "type": cmd_type,
             }
-
-            candidate["_error"] = self.validate_target(candidate)
-
-            keywords = [name, *aliases]
-            is_conflict = any(str(k).strip().casefold() in reserved for k in keywords if str(k).strip())
-            if not is_conflict and cmd_type != "url":
-                normalized = os.path.normcase(os.path.abspath(expanded_location))
-                is_conflict = normalized in existing_locations
-            candidate["_conflict"] = is_conflict
-
+            candidate["_error"], candidate["_conflict"] = self.check_import_candidate(candidate)
             candidates.append(candidate)
 
         return candidates
@@ -397,6 +456,9 @@ class CommandManager:
                 "description": candidate.get("description", ""),
                 "type": cmd_type,
             }
+            if candidate.get("icon"):
+                # Set when the user styled the command in the editor before importing.
+                entry["icon"] = candidate["icon"]
             commands.append(entry)
             for keyword in keywords:
                 text = str(keyword).strip()
@@ -413,6 +475,8 @@ class CommandManager:
     def existing_command_locations(self) -> set[str]:
         """Return normalized locations of user commands already stored on disk."""
         return self._command_locations(self._read_raw_commands())
+
+    # ------------------------------------------------------------------ icons
 
     def reprocess_command_icons(self, icon_manager, force: bool = False) -> dict:
         """Resolve and store a permanent icon for every user command.
@@ -439,6 +503,8 @@ class CommandManager:
         self.reload_command_trie()
         return updated
 
+    # ------------------------------------------------------------ persistence
+
     def _write_raw_commands(self, commands: list[dict]):
         blocks = [_serialize_command(cmd) for cmd in commands]
         self.command_file_path.write_text("\n".join(blocks), encoding="utf-8")
@@ -457,70 +523,48 @@ class CommandManager:
         for keyword, command_name in keyword_to_command.items():
             self.lookup_trie.insert(keyword, command_name)
 
-    def get_matching_commands(self, main_window: MainWindow, text):
+    # -------------------------------------------------------------- searching
+
+    def find_matching_commands(self, text: str) -> list[dict]:
+        """Return the commands whose name or alias starts with `text`, sorted by name."""
         max_results = self.settings.search.max_results
-
-        # Get unique command names from trie
         command_names = self.lookup_trie.search_prefix(text, max_results=max_results)
+        results = [self.commands[name] for name in command_names if name in self.commands]
+        return sorted(results, key=lambda x: x["name"].lower())
 
-        # Get full command data for display
-        results = []
-        for cmd_name in command_names:
-            cmd = self.commands.get(cmd_name)
-            if cmd:
-                results.append(cmd)
-
-        # Sort by command name
-        results = sorted(results, key=lambda x: x["name"].lower())
+    def get_matching_commands(self, main_window: "MainWindow", text):
+        results = self.find_matching_commands(text)
         main_window.show_results(results)
         return results
 
-    def execute_command(self, main_window: MainWindow, text: str):
-        command_names = self.lookup_trie.search_prefix(text, max_results=1)
+    # -------------------------------------------------------------- execution
 
-        cmd = None
-        if command_names and command_names[0].lower() == text.lower():
-            cmd = self.commands.get(command_names[0])
-        elif text.startswith("= "):
-            try:
-                calc_result = str(text.removeprefix("= "))
-                pyperclip.copy(calc_result)
-                print(f"Result: {calc_result} (copied to clipboard)")
-            except ValueError:
-                pass
+    def execute_command(self, main_window: "MainWindow", name: str):
+        """Run the command called `name`, if there is one."""
+        cmd = self.commands.get(name)
+        if cmd is None:
+            return
 
-        if cmd:
-            try:
-                cmd_type = cmd["type"]
+        try:
+            cmd_type = cmd["type"]
 
-                # Handle system commands
-                if cmd_type == "system":
-                    self._execute_system_command(main_window, cmd["action"])
-                elif cmd_type == "url":
-                    self._open_url(cmd["location"])
-                elif cmd_type == "file":
-                    self._open_file(cmd.get("_path") or cmd["location"])
-                elif cmd_type == "script":
-                    self._run_script(cmd["location"])
-                print(f"Executing: {cmd['description']}")
+            # Handle system commands
+            if cmd_type == "system":
+                self._execute_system_command(main_window, cmd["action"])
+            elif cmd_type == "url":
+                self._open_url(cmd["location"])
+            else:
+                self._open_file(cmd.get("_path") or cmd["location"])
+            print(f"Executing: {cmd['description']}")
+            self.increment_run_count(cmd["name"])
 
-                cmd["times_executed"] = cmd["times_executed"] + 1
+        except Exception as e:
+            main_window.display_error_popup(f"Error: {e}")
 
-            except Exception as e:
-                main_window.display_error_popup(f"Error: {e}")
-
-    def _execute_system_command(self, main_window: MainWindow, action: str):
+    def _execute_system_command(self, main_window: "MainWindow", action: str):
         """Execute a built-in system command"""
         if action == "open_settings":
-            main_window.open_settings_file()
-        elif action == "open_commands":
-            main_window.open_commands_file()
-
-    def _run_script(self, script_path: str):
-        """Execute a Python script"""
-        result = subprocess.run(["python", script_path], capture_output=True, text=True)
-        if result.returncode != 0:
-            raise RuntimeError(f"Script failed: {result.stderr}")
+            main_window.open_settings_editor()
 
     def _open_file(self, file_path):
         """Open a file or folder"""

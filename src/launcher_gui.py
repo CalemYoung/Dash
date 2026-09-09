@@ -1,5 +1,5 @@
 from PyQt6.QtCore import QEasingCurve, QPointF, QRectF, QSize, Qt, QThread, QTimer, QPropertyAnimation, QUrl
-from PyQt6.QtWidgets import QMainWindow, QLineEdit, QVBoxLayout, QHBoxLayout, QWidget, QStackedWidget, QPushButton
+from PyQt6.QtWidgets import QMainWindow, QLineEdit, QVBoxLayout, QHBoxLayout, QWidget, QStackedWidget, QPushButton, QSizePolicy
 from PyQt6.QtWidgets import QListWidget, QMessageBox, QSystemTrayIcon, QMenu, QApplication, QErrorMessage, QLabel, QListWidgetItem
 from PyQt6.QtWidgets import QGraphicsOpacityEffect, QFileDialog, QProgressDialog
 from PyQt6.QtGui import QBrush, QIcon, QAction, QDesktopServices, QMouseEvent, QPainter, QPen, QPixmap, QCursor, QScreen, QKeySequence, QShortcut, QColor
@@ -11,14 +11,15 @@ from .command_trie import TrieSnapshot
 from typing import cast
 from .calculator import eval_expression
 from .icon_browser import glyph_pixmap, OutlineIcon
+from .version import current_version, is_newer_version
 import os
 import sys
 from pathlib import Path
 import win32gui
 import win32con
 import datetime
+import pyperclip
 
-# import pygetwindow as gw
 import win32process
 import win32api
 
@@ -26,36 +27,13 @@ import win32api
 LATEST_RELEASE_API = "https://api.github.com/repos/CalemYoung/Dash/releases/latest"
 LATEST_RELEASE_PAGE = "https://github.com/CalemYoung/Dash/releases/latest"
 
+# Windows may not have the notification area ready when Dash starts at login.
+TRAY_SETUP_RETRIES = 20
+TRAY_SETUP_RETRY_MS = 3000
 
-def _current_version() -> str:
-    root = Path(sys._MEIPASS) if hasattr(sys, "_MEIPASS") else Path(__file__).parent.parent
-    try:
-        version = (root / "build" / "installer" / "version.txt").read_text(encoding="utf-8").strip()
-    except OSError:
-        version = ""
-    if version:
-        return version
-
-    import dash
-
-    return str(getattr(dash, "__version__", "Unknown"))
-
-
-def _version_key(value: str) -> tuple[int, ...] | None:
-    core = value.strip().lstrip("vV").split("-", 1)[0].split("+", 1)[0]
-    parts = core.split(".")
-    if not parts or any(not part.isdigit() for part in parts):
-        return None
-    return tuple(int(part) for part in parts) + (0,) * max(0, 3 - len(parts))
-
-
-def _is_newer_version(latest: str, current: str) -> bool:
-    latest_key = _version_key(latest)
-    current_key = _version_key(current)
-    if latest_key is None or current_key is None:
-        return False
-    width = max(len(latest_key), len(current_key))
-    return latest_key + (0,) * (width - len(latest_key)) > current_key + (0,) * (width - len(current_key))
+# Vertical padding of #ResultsList in style.qss; the list height is sized to
+# whole rows so the last visible row is never cut through its text.
+RESULTS_LIST_PADDING_V = 4
 
 
 class ProgramDiscoveryThread(QThread):
@@ -81,6 +59,25 @@ class ProgramDiscoveryThread(QThread):
         finally:
             if pythoncom_module is not None:
                 pythoncom_module.CoUninitialize()
+
+
+def _key_sequences(shortcut: str) -> list[QKeySequence]:
+    """Key sequences for a shortcut string, accepting both Enter keys.
+
+    Qt reports the main Return key and the numeric keypad Enter as different
+    keys, so "Ctrl+Return" alone would never match keypad Enter and the line
+    edit would run the command instead. A shortcut written with either name
+    is registered for both.
+    """
+    text = shortcut.strip()
+    variants = [text]
+    lowered = text.lower()
+    if lowered.endswith("return"):
+        variants.append(text[: -len("return")] + "Enter")
+    elif lowered.endswith("enter"):
+        variants.append(text[: -len("enter")] + "Return")
+    sequences = [QKeySequence(variant) for variant in variants]
+    return [sequence for sequence in sequences if not sequence.isEmpty()]
 
 
 def _text_style(color_value: str, point_size: int | None = None) -> str:
@@ -397,14 +394,19 @@ class MainWindow(QMainWindow):
         self._apply_clock_text_style()
 
         # 3: Create results widget
+        self._results_list_height = self.settings.ui.results_height
         self.results_list_widget = QListWidget()
         self.results_list_widget.setObjectName("ResultsList")
-        self.results_list_widget.setFixedSize(QSize(self.settings.ui.program_width, self.settings.ui.results_height))
+        self.results_list_widget.setFixedSize(QSize(self.settings.ui.program_width, self._results_list_height))
+        self.results_list_widget.currentItemChanged.connect(self._on_current_result_changed)
+        # Arrow keys and the wheel still scroll; the bar itself only cluttered the inset cards.
+        self.results_list_widget.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.results_list_widget.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.results_list_widget.hide()
         self.search_tree_widget = SearchTreeWidget(self._layout_scale)
         self.search_tree_widget.setFixedSize(
             self._search_tree_width(),
-            self.settings.ui.search_height + self.settings.ui.results_height,
+            self.settings.ui.search_height + self._results_list_height,
         )
         self.search_tree_widget.hide()
         self.shortcut_hint_label = QLabel(self._shortcut_hint_text())
@@ -468,12 +470,22 @@ class MainWindow(QMainWindow):
         self.view_stack.addWidget(self.central_widget)
         self.setCentralWidget(self.view_stack)
 
+    def _on_current_result_changed(self, current, previous):
+        """Mirror the list selection onto the row widgets so style.qss can
+        restyle their children (icon tile, counter pill) for the selected row."""
+        for item, selected in ((previous, False), (current, True)):
+            if item is None:
+                continue
+            row = self.results_list_widget.itemWidget(item)
+            if isinstance(row, ResultRow):
+                row.set_selected(selected)
+
     def _search_tree_width(self):
         return max(240, min(300, round(self.settings.ui.program_width * 0.56)))
 
     def _sync_search_view_size(self):
         tree_width = 0 if self.search_tree_widget.isHidden() else self.search_tree_widget.width()
-        results_height = 0 if self.results_list_widget.isHidden() else self.settings.ui.results_height
+        results_height = 0 if self.results_list_widget.isHidden() else self._results_list_height
         self._search_view_size = QSize(
             self.settings.ui.program_width + tree_width,
             self.settings.ui.search_height + results_height + self.footer_height,
@@ -502,11 +514,13 @@ class MainWindow(QMainWindow):
         self._sync_search_view_size()
 
     def _setup_shortcuts(self):
-        self.edit_shortcut = QShortcut(QKeySequence(self.settings.shortcuts.edit_selected_command), self.central_widget)
+        self.edit_shortcut = QShortcut(self.central_widget)
+        self.edit_shortcut.setKeys(_key_sequences(self.settings.shortcuts.edit_selected_command))
         self.edit_shortcut.setContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
         self.edit_shortcut.activated.connect(self.open_selected_command_editor)
 
-        self.new_command_shortcut = QShortcut(QKeySequence(self.settings.shortcuts.new_command), self.central_widget)
+        self.new_command_shortcut = QShortcut(self.central_widget)
+        self.new_command_shortcut.setKeys(_key_sequences(self.settings.shortcuts.new_command))
         self.new_command_shortcut.setContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
         self.new_command_shortcut.activated.connect(self.open_new_command)
 
@@ -623,11 +637,11 @@ class MainWindow(QMainWindow):
         """Setup system tray with retry logic for Windows startup"""
         self.tray = self.setup_tray_icon()
 
-        # Verify tray icon is visible, retry if not (up to 5 times)
-        if not self.tray.isVisible() and self._tray_retry_count < 20:
+        # Verify tray icon is visible, retry if not
+        if not self.tray.isVisible() and self._tray_retry_count < TRAY_SETUP_RETRIES:
             self._tray_retry_count += 1
-            print(f"Tray icon not visible, retrying... ({self._tray_retry_count}/5)")
-            QTimer.singleShot(3000, self._setup_tray)
+            print(f"Tray icon not visible, retrying... ({self._tray_retry_count}/{TRAY_SETUP_RETRIES})")
+            QTimer.singleShot(TRAY_SETUP_RETRY_MS, self._setup_tray)
 
     def setup_tray_icon(self):
         """Create and configure system tray icon with menu"""
@@ -643,6 +657,10 @@ class MainWindow(QMainWindow):
         install_location_action = QAction("Open Install Location", self)
         install_location_action.triggered.connect(self.open_install_location)
         self.tray_menu.addAction(install_location_action)
+
+        config_folder_action = QAction("Open Config Folder", self)
+        config_folder_action.triggered.connect(self.open_config_folder)
+        self.tray_menu.addAction(config_folder_action)
 
         self._check_updates_action = QAction("Check for Updates...", self)
         self._check_updates_action.triggered.connect(lambda: self.check_for_updates(manual=True))
@@ -713,7 +731,7 @@ class MainWindow(QMainWindow):
             release = json.loads(bytes(reply.readAll()).decode("utf-8"))
             latest_tag = str(release.get("tag_name", "")).strip()
             release_url = str(release.get("html_url", "")).strip()
-            current_version = _current_version()
+            installed_version = current_version()
             if not latest_tag or not release_url:
                 raise ValueError("GitHub returned incomplete release information")
         except (RuntimeError, ValueError, UnicodeDecodeError, json.JSONDecodeError) as error:
@@ -724,7 +742,7 @@ class MainWindow(QMainWindow):
 
         reply.deleteLater()
         latest_version = latest_tag.lstrip("vV")
-        if _is_newer_version(latest_tag, current_version):
+        if is_newer_version(latest_tag, installed_version):
             self._latest_version = latest_version
             self._latest_release_url = release_url
             if self._download_update_action is not None:
@@ -741,7 +759,7 @@ class MainWindow(QMainWindow):
                     10000,
                 )
         elif manual:
-            QMessageBox.information(self, "Check for Updates", f"Dash {current_version} is up to date.")
+            QMessageBox.information(self, "Check for Updates", f"Dash {installed_version} is up to date.")
 
     def _show_update_available(self, latest_version: str):
         message_box = QMessageBox(self)
@@ -757,10 +775,6 @@ class MainWindow(QMainWindow):
 
     def open_latest_release(self):
         QDesktopServices.openUrl(QUrl(self._latest_release_url or LATEST_RELEASE_PAGE))
-
-    def open_settings_file(self):
-        """Open the in-app settings editor."""
-        self.open_settings_editor()
 
     def set_hotkey_listener(self, listener):
         self._hotkey_listener = listener
@@ -805,8 +819,8 @@ class MainWindow(QMainWindow):
         self.icon_manager.settings = settings
         if self._hotkey_listener is not None:
             self._hotkey_listener.update_hotkey(settings.general.hotkey)
-        self.edit_shortcut.setKey(QKeySequence(settings.shortcuts.edit_selected_command))
-        self.new_command_shortcut.setKey(QKeySequence(settings.shortcuts.new_command))
+        self.edit_shortcut.setKeys(_key_sequences(settings.shortcuts.edit_selected_command))
+        self.new_command_shortcut.setKeys(_key_sequences(settings.shortcuts.new_command))
         self._apply_search_text_style()
         self._layout_scale = max(0.8, min(1.4, settings.ui.program_width / 500))
         self._layout_margin = max(10, round(10 * self._layout_scale))
@@ -821,11 +835,12 @@ class MainWindow(QMainWindow):
         footer_layout.setContentsMargins(self._layout_margin, 0, self._layout_margin, 0)
         footer_layout.setSpacing(self._layout_spacing)
         self.search_container_widget.setFixedSize(QSize(settings.ui.program_width, settings.ui.search_height))
-        self.results_list_widget.setFixedSize(QSize(settings.ui.program_width, settings.ui.results_height))
+        self._results_list_height = settings.ui.results_height  # re-snapped by the next show_results
+        self.results_list_widget.setFixedSize(QSize(settings.ui.program_width, self._results_list_height))
         self.search_tree_widget.set_scale(self._layout_scale)
         self.search_tree_widget.setFixedSize(
             self._search_tree_width(),
-            settings.ui.search_height + settings.ui.results_height,
+            settings.ui.search_height + self._results_list_height,
         )
         if self.user_text:
             self._update_search_tree(self.user_text)
@@ -835,34 +850,14 @@ class MainWindow(QMainWindow):
             self._clear_and_hide_results()
         self.shortcut_hint_label.setText(self._shortcut_hint_text())
 
-    def open_commands_file(self):
-        """Open commands.toml in default text editor"""
-        if hasattr(sys, "_MEIPASS"):
-            # Installed - commands in AppData
-            app_data = Path(os.environ.get("APPDATA", "")) / "Dash"
-            commands_path = app_data / "config" / "commands.toml"
-        else:
-            # Development - commands in project folder
-            commands_path = Path(__file__).parent.parent / "config" / "commands.toml"
+    def open_config_folder(self):
+        """Open the folder holding settings.toml and commands.toml in Explorer."""
+        config_path = self.cmd_manager.command_file_path.parent
 
-        if commands_path.exists():
-            os.startfile(commands_path)
+        if config_path.exists():
+            os.startfile(config_path)
         else:
-            self.display_error_popup(f"commands.toml not found at {commands_path}")
-
-    def open_icons_folder(self):
-        """Open icons folder in file explorer"""
-        if hasattr(sys, "_MEIPASS"):
-            # Installed - icons in install directory alongside exe
-            icons_path = Path(sys.executable).parent / "assets" / "icons"
-        else:
-            # Development - icons in project folder
-            icons_path = Path(__file__).parent.parent / "assets" / "icons"
-
-        if icons_path.exists():
-            os.startfile(icons_path)
-        else:
-            self.display_error_popup(f"Icons folder not found at {icons_path}")
+            self.display_error_popup(f"Config folder not found at {config_path}")
 
     def open_install_location(self):
         """Open the directory containing the installed executable."""
@@ -939,24 +934,29 @@ class MainWindow(QMainWindow):
             self._clear_and_hide_results()
 
     def on_enter_pressed(self):
-        selected_command = self.get_selected_command()
+        row = self.get_selected_row()
+        if row is not None:
+            self.activate_row(row)
 
-        if selected_command is None:
+    def activate_row(self, row: "ResultRow"):
+        """Act on a results row: copy a calculator value, or run its command."""
+        if row.copy_value is not None:
+            pyperclip.copy(row.copy_value)
+            print(f"Result: {row.copy_value} (copied to clipboard)")
+            self.hide_launcher()
             return
 
-        self.activate_command(selected_command)
-
-    def activate_command(self, name):
-        """Run the selected command."""
-        if name is None:
+        cmd = self.cmd_manager.commands.get(row.command_name)
+        if cmd is None:
+            # "No results found" and similar informational rows: Enter just cancels.
+            self.hide_launcher()
             return
 
-        cmd = self.cmd_manager.commands.get(name)
-        self.cmd_manager.execute_command(self, name)
+        self.cmd_manager.execute_command(self, row.command_name)
 
         # Opening settings swaps in an in-window panel; hiding the launcher
         # right after would hide that panel too, so leave the window shown.
-        opens_panel = cmd is not None and cmd.get("type") == "system" and cmd.get("action") == "open_settings"
+        opens_panel = cmd.get("type") == "system" and cmd.get("action") == "open_settings"
         if not opens_panel:
             self.hide_launcher()
 
@@ -977,9 +977,6 @@ class MainWindow(QMainWindow):
         if not self.isVisible():
             self.activate_launcher()
         self.open_editor(None)
-
-    def import_recent_programs(self):
-        self.choose_recent_programs()
 
     def choose_recent_programs(self):
         if self._program_discovery_thread is not None:
@@ -1087,6 +1084,8 @@ class MainWindow(QMainWindow):
             return
 
         summary = self.cmd_manager.import_commands(selected)
+        if summary["imported"]:
+            self.cmd_manager.reprocess_command_icons(self.icon_manager)
         imported_count = len(summary["imported"])
         skipped_count = len(summary["skipped"])
         message = f"Imported {imported_count} command"
@@ -1144,14 +1143,16 @@ class MainWindow(QMainWindow):
             self._clear_and_hide_results()
         self.search_input_widget.setFocus()
 
-    def get_selected_command(self):
+    def get_selected_row(self) -> "ResultRow | None":
         item = self.results_list_widget.currentItem()
         if item is None:
             return None
-        result_row = cast(ResultRow, self.results_list_widget.itemWidget(item))
-        if result_row is None:
-            return None
-        return result_row.command_name
+        widget = self.results_list_widget.itemWidget(item)
+        return cast(ResultRow, widget) if widget is not None else None
+
+    def get_selected_command(self):
+        row = self.get_selected_row()
+        return row.command_name if row is not None else None
 
     def keyPressEvent(self, event):
         count = self.results_list_widget.count()
@@ -1188,6 +1189,7 @@ class MainWindow(QMainWindow):
                     icon_path=self.settings.paths.calculator_icon,
                     command=f"= {result}",
                     description="Calculator result (press Enter to copy)",
+                    copy_value=str(result),
                 )
                 item.setSizeHint(result_widget.sizeHint())
                 self.results_list_widget.setItemWidget(item, result_widget)
@@ -1205,6 +1207,7 @@ class MainWindow(QMainWindow):
                 item.setSizeHint(no_results_widget.sizeHint())
                 self.results_list_widget.setItemWidget(item, no_results_widget)
                 self.results_list_widget.setCurrentRow(0)
+            self._snap_results_height()
             return
 
         # Show regular command results
@@ -1212,20 +1215,54 @@ class MainWindow(QMainWindow):
             item = QListWidgetItem(self.results_list_widget)
             icon_path = self.icon_manager.get_icon_path(result)
             description = result["description"] if self.settings.search.show_descriptions else ""
+            # Only user commands carry a counter, and only once they have been
+            # used: a "0" on every row is noise rather than information.
+            run_counter = ""
+            times_executed = int(result.get("times_executed", 0))
+            if self.settings.search.show_run_counter and result.get("type") != "system" and times_executed > 0:
+                run_counter = "1 run" if times_executed == 1 else f"{times_executed} runs"
             result_widget = ResultRow(
                 self,
                 icon_path=icon_path,
                 command=result["name"],
                 description=description,
+                run_counter=run_counter,
                 editable=result.get("type") != "system",
             )
             item.setSizeHint(result_widget.sizeHint())
             self.results_list_widget.setItemWidget(item, result_widget)
         self.results_list_widget.setCurrentRow(0)
+        self._snap_results_height()
+
+    def _snap_results_height(self):
+        """Size the results list to whole rows, within the configured height.
+
+        Rows are a constant height, so this settles once per session (and
+        again after a settings change) rather than moving with every keystroke.
+        """
+        item = self.results_list_widget.item(0)
+        if item is None:
+            return
+        row_height = item.sizeHint().height()
+        if row_height <= 0:
+            return
+        padding = 2 * RESULTS_LIST_PADDING_V
+        # Nearest whole number of rows to the configured height, never fewer than one.
+        rows = max(1, round((self.settings.ui.results_height - padding) / row_height))
+        height = rows * row_height + padding
+        if height == self._results_list_height:
+            return
+        self._results_list_height = height
+        self.results_list_widget.setFixedSize(QSize(self.settings.ui.program_width, height))
+        self.search_tree_widget.setFixedSize(
+            self._search_tree_width(),
+            self.settings.ui.search_height + height,
+        )
+        self._sync_search_view_size()
 
     def show_about(self):
         """Show about dialog"""
-        version = _current_version()
+        version = current_version()
 
         about_box = QMessageBox()
         about_box.setWindowTitle("About Dash")
@@ -1246,23 +1283,69 @@ class MainWindow(QMainWindow):
         about_box.exec()
 
 
-class ResultRow(QWidget):
-    ICON_SIZE = 42
-    ICON_BOX_SIZE = 46
+class ElidedLabel(QLabel):
+    """Single-line label that trims long text with an ellipsis instead of
+    forcing the row wider or being clipped mid-word."""
 
-    def __init__(self, main_window: MainWindow, icon_path, command, description, command_name=None, editable=False):
-        super().__init__()
+    def __init__(self, text, parent):
+        super().__init__(text, parent)
+        self._full_text = text
+        self.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
+        self.setMinimumWidth(0)
+
+    def setText(self, text):
+        self._full_text = text
+        self._apply_elision()
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self._apply_elision()
+
+    def _apply_elision(self):
+        available = max(0, self.width())
+        elided = self.fontMetrics().elidedText(self._full_text, Qt.TextElideMode.ElideRight, available)
+        if elided != super().text():
+            super().setText(elided)
+        self.setToolTip(self._full_text if elided != self._full_text else "")
+
+
+class ResultRow(QWidget):
+    ICON_SIZE = 28  # glyph inside the tile
+    ICON_TILE_SIZE = 42  # rounded tile drawn behind every icon (see #ResultIconTile)
+
+    def __init__(
+        self,
+        main_window: MainWindow,
+        icon_path,
+        command,
+        description,
+        run_counter="",
+        command_name=None,
+        editable=False,
+        copy_value: str | None = None,
+    ):
+        # Every widget in a row is created with its parent set. A parentless
+        # QWidget is a top-level window, and Qt creates a native window for it
+        # (with a title-bar helper window on Windows) as soon as it is styled,
+        # before the layout or setItemWidget() reparents it. That cost ~45ms
+        # per row, flashed a window on screen for every keystroke, and leaked
+        # the helper windows for the life of the process.
+        super().__init__(main_window.results_list_widget.viewport())
 
         # Logical name used to activate the row (defaults to the display text).
         self.command_name = command if command_name is None else command_name
+        # Set for calculator rows: activating the row copies this to the clipboard.
+        self.copy_value = copy_value
 
         # Create the main horizontal layout
         row_layout = QHBoxLayout(self)
         row_layout.setContentsMargins(4, 3, 8, 3)
         row_layout.setSpacing(8)
 
-        # Icon label
-        self.icon_label = QLabel()
+        # Icon on a uniform rounded tile, so icons from different sources
+        # (extracted exe icons, favicons, bundled glyphs) read as one set.
+        self.icon_label = QLabel(self)
+        self.icon_label.setObjectName("ResultIconTile")
         pixmap = QPixmap(icon_path)
         self.icon_label.setPixmap(
             pixmap.scaled(
@@ -1272,11 +1355,11 @@ class ResultRow(QWidget):
                 Qt.TransformationMode.SmoothTransformation,
             )
         )
-        self.icon_label.setFixedSize(self.ICON_BOX_SIZE, self.ICON_BOX_SIZE)
+        self.icon_label.setFixedSize(self.ICON_TILE_SIZE, self.ICON_TILE_SIZE)
         self.icon_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
         # Command label (bold, larger)
-        self.command_label = QLabel(command)
+        self.command_label = ElidedLabel(command, self)
         self.command_label.setObjectName("ResultCommandLabel")
         command_font = self.command_label.font()
         command_font.setPointSize(main_window.settings.ui.result_font_size)
@@ -1284,33 +1367,38 @@ class ResultRow(QWidget):
         self.command_label.setStyleSheet(_text_style(main_window.settings.ui.result_text_color))
 
         # Description label (gray, smaller)
-        self.description_label = QLabel(description)
+        self.description_label = ElidedLabel(description, self)
         self.description_label.setObjectName("ResultDescriptionLabel")
         description_font = self.description_label.font()
         description_font.setPointSize(main_window.settings.ui.description_font_size)
         self.description_label.setFont(description_font)
         self.description_label.setStyleSheet(_text_style(main_window.settings.ui.description_text_color))
 
-        self.mode_label = QLabel("")
-        self.mode_label.setObjectName("ResultModeLabel")
+        # Run counter: a small pill on the right edge, styled in style.qss
+        self.run_counter_label = QLabel(run_counter, self)
+        self.run_counter_label.setObjectName("ResultRunCounterLabel")
+        self.run_counter_label.setFont(description_font)
+        self.run_counter_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.run_counter_label.setVisible(bool(run_counter))
 
-        # Text layout (vertical - command above description)
+        # Text layout (vertical - command above description). It takes all the
+        # width left over by the icon, pill and pencil; the labels elide to fit.
         text_layout = QVBoxLayout()
         text_layout.setSpacing(2)
-
-        # Add labels to text layout
         text_layout.addWidget(self.command_label)
         text_layout.addWidget(self.description_label)
 
-        # Add icon and text layout to main row
         row_layout.addWidget(self.icon_label)
-        row_layout.addLayout(text_layout)
-        row_layout.addStretch()  # Push items apart
-        # row_layout.addWidget(self.mode_label)
+        row_layout.addLayout(text_layout, 1)
+        row_layout.addWidget(self.run_counter_label, 0, Qt.AlignmentFlag.AlignVCenter)
 
         self.main_window = main_window
+        # Keep the right edge straight: rows without an edit button reserve the
+        # same width so counters line up in one column.
+        if not editable:
+            row_layout.addSpacing(30)
         if editable:
-            self.edit_button = QPushButton()
+            self.edit_button = QPushButton(self)
             self.edit_button.setObjectName("ResultEditButton")
             self.edit_button.setIcon(QIcon(glyph_pixmap(OutlineIcon.PENCIL, 18, QColor("#8b929e"))))
             self.edit_button.setIconSize(QSize(18, 18))
@@ -1320,7 +1408,16 @@ class ResultRow(QWidget):
             self.edit_button.clicked.connect(lambda: self.main_window.open_selected_command_editor_by_name(self.command_name))
             row_layout.addWidget(self.edit_button)
 
+    def set_selected(self, selected: bool):
+        if self.property("selected") == selected:
+            return
+        self.setProperty("selected", selected)
+        for widget in (self.icon_label, self.run_counter_label):
+            style = widget.style()
+            if style is not None:
+                style.unpolish(widget)
+                style.polish(widget)
+
     def mousePressEvent(self, a0: QMouseEvent | None) -> None:
-        # launch command
-        self.main_window.activate_command(self.command_name)
+        self.main_window.activate_row(self)
         return super().mousePressEvent(a0)

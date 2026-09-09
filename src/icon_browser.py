@@ -375,12 +375,24 @@ class ClickableLabel(QLabel):
             self.clicked.emit()
 
 
+_GLYPH_CACHE = {}
+
+
 def glyph_pixmap(member, size, color):
-    """A single tinted Tabler glyph, for the home-screen option cards."""
+    """A single tinted Tabler glyph, for buttons and option cards.
+
+    Rendering goes through SVG parsing, pygame and a per-pixel tint, so the
+    result is cached: the launcher asks for the same few glyphs on every
+    keystroke.
+    """
+    key = (member, size, QColor(color).rgba())
+    cached = _GLYPH_CACHE.get(key)
+    if cached is not None:
+        return cached
     base = render_icon(member, size)
-    if base is None:
-        return QPixmap()
-    return tint_pixmap(smooth_scale(base, size), color)
+    pixmap = QPixmap() if base is None else tint_pixmap(smooth_scale(base, size), color)
+    _GLYPH_CACHE[key] = pixmap
+    return pixmap
 
 
 class OptionCard(QFrame):

@@ -4,13 +4,9 @@ import shutil
 import os
 import traceback
 
-__version__ = "2.2.2"
-
 
 def get_app_data_dir():
     """Get AppData directory for user configs"""
-    import os
-
     app_name = "Dash"
 
     if sys.platform == "win32":
@@ -46,11 +42,15 @@ def _log_fatal_error():
 
 try:
     from src import CommandManager, MainWindow, HotkeyListener, Settings
+    from src.version import current_version
     from PyQt6.QtWidgets import QApplication
 except Exception:
     _log_fatal_error()
     sys.exit(1)
 
+# The version is read from build/installer/version.txt, the single source of
+# truth that the build also stamps into the installer and exe metadata.
+__version__ = current_version()
 
 
 def get_resource_path(relative_path):
@@ -63,7 +63,7 @@ def get_resource_path(relative_path):
     # --- Installed app only below ---
 
     # User-editable files go to AppData
-    if relative_path in ["config/settings.toml", "config/commands.toml", "cache"]:
+    if relative_path in ["config/settings.toml", "config/commands.toml"]:
         app_data = get_app_data_dir()
         resource_path = app_data / relative_path
 

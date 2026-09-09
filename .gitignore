@@ -1,15 +1,16 @@
-# Build artifacts
+# Build artifacts (generated from build/installer/version.txt)
 build/dash/
 build/temp/
+build/installer/version_info.txt
 dist/
 
-# Other
-assets/cache/
+# User data
 config/commands.toml
 config/settings.toml
+config/run_counts.json
+
+# Tooling
 __pycache__/
 *.pyc
 .venv/
 .vscode/
-
-version_info.txt
