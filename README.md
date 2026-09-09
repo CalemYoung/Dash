@@ -33,7 +33,7 @@
 ### Search and launch
 
 Type a few letters and the name completes inline. Aliases work too, and
-anything that is not a command is evaluated as a calculation.
+calculations can also be done.
 
 <p align="left">
    <img src="assets/launcher-search.gif" alt="Typing into Dash: matches narrow as you type, an alias opens GitHub, and 12*8 shows a calculator result" width="600">
