@@ -30,7 +30,9 @@ sort_results = "popularity"
 show_descriptions = true
 # Counts are always recorded; this only controls whether the pill is shown.
 show_run_counter = false
-show_command_tree = true
+# The command tree panel shows how each typed letter narrows the matches.
+# Off by default to keep the launcher to a single column; turn it on in Settings.
+show_command_tree = false
 
 [shortcuts]
 edit_selected_command = "Ctrl+Return"

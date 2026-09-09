@@ -25,6 +25,7 @@
 - **Flexible commands:** Launch applications, files, folders, and URLs from one search box.
 - **Fast matching:** Find commands by name or add aliases for the terms you naturally type.
 - **Quick calculations:** Evaluate mathematical expressions without opening another app.
+- **Command tree:** Optionally show a side panel that maps how each letter you type narrows the matches. Turn it on under Settings.
 - **Made to fit:** Customize commands, icons, settings, and startup behavior.
 
 ## See Dash in action
