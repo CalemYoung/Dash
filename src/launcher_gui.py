@@ -12,6 +12,7 @@ from typing import cast
 from .calculator import eval_expression
 from .icon_browser import glyph_pixmap, OutlineIcon
 from .version import current_version, is_newer_version
+from .updater import ReleaseInfo, UpdateDownloader, is_installed_build, launch_installer, parse_release
 import os
 import sys
 from pathlib import Path
@@ -312,10 +313,12 @@ class MainWindow(QMainWindow):
         self._update_network = QNetworkAccessManager(self)
         self._update_reply = None
         self._update_check_manual = False
-        self._latest_release_url = ""
-        self._latest_version = ""
+        self._latest_release: ReleaseInfo | None = None
         self._check_updates_action = None
         self._download_update_action = None
+        self._update_downloader: UpdateDownloader | None = None
+        self._update_progress = None
+        self._pending_installer: str | None = None
         self._program_discovery_thread = None
         self._program_discovery_progress = None
 
@@ -558,6 +561,10 @@ class MainWindow(QMainWindow):
         self.hide()
         self.search_input_widget.clear()
         self.user_text = ""
+        # A verified update that arrived while the launcher was open installs
+        # now that it is out of the way.
+        if self._pending_installer and self.settings.general.auto_install_updates:
+            QTimer.singleShot(500, lambda: self._install_now(self._pending_installer) if self._pending_installer else None)
 
     def activate_launcher(self):
         was_visible = self.isVisible()
@@ -667,10 +674,8 @@ class MainWindow(QMainWindow):
         self.tray_menu.addAction(self._check_updates_action)
 
         self._download_update_action = QAction(self)
-        self._download_update_action.triggered.connect(self.open_latest_release)
-        self._download_update_action.setVisible(bool(self._latest_version))
-        if self._latest_version:
-            self._download_update_action.setText(f"Download Dash {self._latest_version}...")
+        self._download_update_action.triggered.connect(lambda: self.install_update(manual=True))
+        self._refresh_update_action()
         self.tray_menu.addAction(self._download_update_action)
 
         self.tray_menu.addSeparator()
@@ -728,11 +733,9 @@ class MainWindow(QMainWindow):
         try:
             if reply.error() != QNetworkReply.NetworkError.NoError:
                 raise RuntimeError(reply.errorString())
-            release = json.loads(bytes(reply.readAll()).decode("utf-8"))
-            latest_tag = str(release.get("tag_name", "")).strip()
-            release_url = str(release.get("html_url", "")).strip()
+            release = parse_release(json.loads(bytes(reply.readAll()).decode("utf-8")))
             installed_version = current_version()
-            if not latest_tag or not release_url:
+            if release is None:
                 raise ValueError("GitHub returned incomplete release information")
         except (RuntimeError, ValueError, UnicodeDecodeError, json.JSONDecodeError) as error:
             if manual:
@@ -741,40 +744,190 @@ class MainWindow(QMainWindow):
             return
 
         reply.deleteLater()
-        latest_version = latest_tag.lstrip("vV")
-        if is_newer_version(latest_tag, installed_version):
-            self._latest_version = latest_version
-            self._latest_release_url = release_url
-            if self._download_update_action is not None:
-                self._download_update_action.setText(f"Download Dash {latest_version}...")
-                self._download_update_action.setVisible(True)
-
+        if not is_newer_version(release.tag, installed_version):
             if manual:
-                self._show_update_available(latest_version)
-            elif self.tray is not None:
-                self.tray.showMessage(
-                    "Dash Update Available",
-                    f"Dash {latest_version} is available. Click to open the release.",
-                    QSystemTrayIcon.MessageIcon.Information,
-                    10000,
-                )
-        elif manual:
-            QMessageBox.information(self, "Check for Updates", f"Dash {installed_version} is up to date.")
+                QMessageBox.information(self, "Check for Updates", f"Dash {installed_version} is up to date.")
+            return
 
-    def _show_update_available(self, latest_version: str):
+        self._latest_release = release
+        self._refresh_update_action()
+
+        if manual:
+            self._show_update_available(release)
+        elif self._can_install(release) and self.settings.general.auto_install_updates:
+            # Fetch quietly now; the install waits for a moment when the
+            # launcher is not in use.
+            self.install_update(manual=False)
+        elif self.tray is not None:
+            action = "Click to install." if self._can_install(release) else "Click to open the release."
+            self.tray.showMessage(
+                "Dash Update Available",
+                f"Dash {release.version} is available. {action}",
+                QSystemTrayIcon.MessageIcon.Information,
+                10000,
+            )
+
+    def _can_install(self, release: ReleaseInfo | None) -> bool:
+        """Silent install needs the packaged build and a verifiable installer."""
+        return release is not None and release.installable and is_installed_build()
+
+    def _refresh_update_action(self):
+        action = self._download_update_action
+        release = self._latest_release
+        if action is None:
+            return
+        action.setVisible(release is not None)
+        if release is None:
+            return
+        if self._pending_installer:
+            action.setText(f"Restart to Update to Dash {release.version}")
+        elif self._can_install(release):
+            action.setText(f"Install Dash {release.version}...")
+        else:
+            action.setText(f"Download Dash {release.version}...")
+
+    def _show_update_available(self, release: ReleaseInfo):
         message_box = QMessageBox(self)
         message_box.setWindowTitle("Dash Update Available")
         message_box.setIcon(QMessageBox.Icon.Information)
-        message_box.setText(f"Dash {latest_version} is available.")
-        message_box.setInformativeText("Open the GitHub release to download the installer?")
-        open_button = message_box.addButton("Open Release", QMessageBox.ButtonRole.AcceptRole)
+        message_box.setText(f"Dash {release.version} is available.")
+        install_button = None
+        if self._can_install(release):
+            message_box.setInformativeText("Install it now? Dash will restart when the update finishes.")
+            install_button = message_box.addButton("Install and Restart", QMessageBox.ButtonRole.AcceptRole)
+        else:
+            message_box.setInformativeText("Open the GitHub release to download the installer?")
+        open_button = message_box.addButton("Open Release", QMessageBox.ButtonRole.ActionRole)
         message_box.addButton(QMessageBox.StandardButton.Cancel)
         message_box.exec()
-        if message_box.clickedButton() is open_button:
+        clicked = message_box.clickedButton()
+        if install_button is not None and clicked is install_button:
+            self.install_update(manual=True)
+        elif clicked is open_button:
             self.open_latest_release()
 
     def open_latest_release(self):
-        QDesktopServices.openUrl(QUrl(self._latest_release_url or LATEST_RELEASE_PAGE))
+        url = self._latest_release.page_url if self._latest_release is not None else LATEST_RELEASE_PAGE
+        QDesktopServices.openUrl(QUrl(url))
+
+    # -- installing updates ---------------------------------------------------
+
+    def install_update(self, manual: bool):
+        """Download the latest installer, verify it, then install and restart.
+
+        Manual installs show progress and install as soon as the download is
+        verified. Automatic ones are silent and wait until the launcher is
+        hidden, so an update never interrupts a search.
+        """
+        release = self._latest_release
+        if release is None:
+            return
+        if not self._can_install(release):
+            self.open_latest_release()
+            return
+        if self._pending_installer:
+            self._install_now(self._pending_installer)
+            return
+        if self._update_downloader is not None:
+            if manual:
+                self._show_download_progress()
+            return
+
+        self._update_downloader = UpdateDownloader(self._update_network, release, self)
+        self._update_downloader.finished.connect(self._on_update_downloaded)
+        self._update_downloader.failed.connect(self._on_update_failed)
+        self._update_downloader.progress.connect(self._on_update_progress)
+        self._update_manual = manual
+        if manual:
+            self._show_download_progress()
+        self._update_downloader.start()
+
+    def _show_download_progress(self):
+        if self._update_progress is not None or self._latest_release is None:
+            return
+        progress = QProgressDialog(self)
+        progress.setWindowTitle("Updating Dash")
+        progress.setLabelText(f"Downloading Dash {self._latest_release.version}...")
+        progress.setRange(0, 0)
+        progress.setMinimumDuration(0)
+        progress.setWindowModality(Qt.WindowModality.WindowModal)
+        progress.canceled.connect(self._cancel_update_download)
+        self._update_progress = progress
+        progress.show()
+
+    def _on_update_progress(self, received: int, total: int):
+        progress = self._update_progress
+        if progress is None:
+            return
+        if total > 0:
+            progress.setRange(0, 100)
+            progress.setValue(int(received * 100 / total))
+
+    def _close_download_progress(self):
+        progress = self._update_progress
+        self._update_progress = None
+        if progress is not None:
+            progress.canceled.disconnect(self._cancel_update_download)
+            progress.close()
+            progress.deleteLater()
+
+    def _cancel_update_download(self):
+        if self._update_downloader is not None:
+            self._update_downloader.cancel()
+            self._update_downloader.deleteLater()
+            self._update_downloader = None
+        self._close_download_progress()
+
+    def _on_update_failed(self, message: str):
+        manual = getattr(self, "_update_manual", False)
+        self._update_downloader = None
+        self._close_download_progress()
+        print(f"Update failed: {message}")
+        if manual:
+            QMessageBox.warning(self, "Updating Dash", f"The update could not be installed.\n\n{message}")
+
+    def _on_update_downloaded(self, installer_path: str):
+        manual = getattr(self, "_update_manual", False)
+        self._update_downloader = None
+        self._close_download_progress()
+        self._pending_installer = installer_path
+        self._refresh_update_action()
+
+        if manual or self._launcher_idle():
+            self._install_now(installer_path)
+        elif self.tray is not None:
+            version = self._latest_release.version if self._latest_release else ""
+            self.tray.showMessage(
+                "Dash Update Ready",
+                f"Dash {version} will install when you close the launcher.",
+                QSystemTrayIcon.MessageIcon.Information,
+                6000,
+            )
+
+    def _launcher_idle(self) -> bool:
+        return not self.isVisible() and self._editor_panel is None
+
+    def _install_now(self, installer_path: str):
+        if not Path(installer_path).exists():
+            self._pending_installer = None
+            self._refresh_update_action()
+            return
+        version = self._latest_release.version if self._latest_release else ""
+        if self.tray is not None:
+            self.tray.showMessage(
+                "Updating Dash",
+                f"Installing Dash {version}. Dash will restart in a moment.",
+                QSystemTrayIcon.MessageIcon.Information,
+                4000,
+            )
+        if not launch_installer(installer_path):
+            self._pending_installer = None
+            self._refresh_update_action()
+            QMessageBox.warning(self, "Updating Dash", "The installer could not be started.")
+            return
+        app = QApplication.instance()
+        if app is not None:
+            QTimer.singleShot(300, app.quit)
 
     def set_hotkey_listener(self, listener):
         self._hotkey_listener = listener

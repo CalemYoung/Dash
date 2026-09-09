@@ -111,8 +111,9 @@ Root: HKCU; Subkey: "Software\{#MyAppPublisher}\{#MyAppName}"; ValueType: string
 Root: HKCU; Subkey: "Software\{#MyAppPublisher}\{#MyAppName}"; ValueType: string; ValueName: "AppDataPath"; ValueData: "{userappdata}\{#MyAppName}"; Flags: uninsdeletekey
 
 [Run]
-; Launch after installation
-Filename: "{app}\{#MyAppExeName}"; Description: "Launch {#MyAppName} now"; Flags: nowait postinstall skipifsilent
+; Launch after installation. Also runs for silent installs, which is how
+; Dash's in-app updater restarts the app once the new version is in place.
+Filename: "{app}\{#MyAppExeName}"; Description: "Launch {#MyAppName} now"; Flags: nowait postinstall
 
 [UninstallRun]
 ; Kill the app before uninstalling (if running)

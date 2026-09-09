@@ -1,6 +1,9 @@
 [general]
 hotkey = "Alt+F"
 show_on_screen_with_mouse = false
+# Download verified updates in the background and install them while the
+# launcher is hidden. Off: updates are only offered, never installed unasked.
+auto_install_updates = true
 
 [ui]
 program_width = 600

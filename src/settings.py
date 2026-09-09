@@ -50,6 +50,7 @@ def _from_section(cls, data: dict):
 class GeneralSettings:
     hotkey: str = DEFAULT_SETTINGS["general"]["hotkey"]
     show_on_screen_with_mouse: bool = DEFAULT_SETTINGS["general"]["show_on_screen_with_mouse"]
+    auto_install_updates: bool = DEFAULT_SETTINGS["general"]["auto_install_updates"]
 
 
 @dataclass

@@ -52,11 +52,24 @@ jobs:
           }
           Get-Item $installer | Select-Object Name, Length
 
+      - name: Write installer checksum
+        shell: pwsh
+        run: |
+          # Dash's in-app updater refuses to run an installer that does not
+          # match this file, so it must be published next to the exe.
+          $version = (Get-Content build/installer/version.txt -Raw).Trim()
+          $installer = "dist/DashSetup-$version.exe"
+          $hash = (Get-FileHash $installer -Algorithm SHA256).Hash.ToLower()
+          Set-Content -Path "$installer.sha256" -Value "$hash *DashSetup-$version.exe" -NoNewline
+          Get-Content "$installer.sha256"
+
       - name: Upload installer artifact
         uses: actions/upload-artifact@v4
         with:
           name: DashSetup
-          path: dist/DashSetup-*.exe
+          path: |
+            dist/DashSetup-*.exe
+            dist/DashSetup-*.exe.sha256
           if-no-files-found: error
           retention-days: 14
 
@@ -65,4 +78,6 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           generate_release_notes: true
-          files: dist/DashSetup-*.exe
+          files: |
+            dist/DashSetup-*.exe
+            dist/DashSetup-*.exe.sha256

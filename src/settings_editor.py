@@ -430,6 +430,11 @@ class SettingsEditorPanel(QFrame):
                     "general.show_on_screen_with_mouse",
                     self._check(self._settings.general.show_on_screen_with_mouse),
                 ),
+                (
+                    "Install updates automatically",
+                    "general.auto_install_updates",
+                    self._check(self._settings.general.auto_install_updates),
+                ),
                 ("Autocomplete", "search.autocomplete", self._check(self._settings.search.autocomplete)),
                 (
                     "Sort results by",
@@ -521,6 +526,7 @@ class SettingsEditorPanel(QFrame):
             general=GeneralSettings(
                 hotkey=self._value("general.hotkey"),
                 show_on_screen_with_mouse=bool(self._value("general.show_on_screen_with_mouse")),
+                auto_install_updates=bool(self._value("general.auto_install_updates")),
             ),
             ui=UISettings(
                 program_width=self._value("ui.program_width"),

@@ -52,6 +52,12 @@
 Use the system tray menu to open settings or manage commands. Dash stores your
 configuration in `%APPDATA%\Dash`, so upgrades keep your settings and commands.
 
+Dash checks GitHub for new releases when it starts. By default it downloads
+the installer in the background, verifies it against the release's SHA-256
+checksum, and installs it while the launcher is hidden, restarting itself
+afterwards. Turn off "Install updates automatically" in Settings to be asked
+first, or use "Check for Updates..." in the tray menu at any time.
+
 ## Development
 
 Dash requires Windows and Python 3.11 or later. To run it from source:
