@@ -32,14 +32,29 @@
 
 ### Search and launch
 
+Type a few letters and the name completes inline. Aliases work too, and
+anything that is not a command is evaluated as a calculation.
+
 <p align="left">
-   <img src="assets/launcher-search.gif" alt="Dash searching for PDF commands" width="780">
+   <img src="assets/launcher-search.gif" alt="Typing into Dash: matches narrow as you type, an alias opens GitHub, and 12*8 shows a calculator result" width="600">
 </p>
 
 ### Manage commands
 
+Press Ctrl+Enter on a result to edit it in place: name, description, type,
+target, aliases and icon.
+
 <p align="left">
-   <img src="assets/command-editor.gif" alt="Editing an application command and its alias in Dash" width="360">
+   <img src="assets/command-editor.gif" alt="Opening the GitHub command in the editor and adding an alias" width="420">
+</p>
+
+### Command tree
+
+An optional side panel that shows how each letter you type narrows the
+matches. Turn it on under Settings.
+
+<p align="left">
+   <img src="assets/command-tree.gif" alt="The command tree panel narrowing from s to spotify" width="780">
 </p>
 
 ## Install
