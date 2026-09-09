@@ -694,6 +694,28 @@ QListWidget::item:selected {
     border: none;
 }
 
+/* The settings page is long enough that the scrollbar has to be findable,
+   not merely present: a visible track shows the bar exists at all, and the
+   handle doubles as a read-out of how much page is left. Scoped so the
+   launcher's results list keeps its near-invisible bar. */
+#SettingsScrollArea QScrollBar:vertical {
+    background: #191b20;
+    width: 12px;
+    margin: 2px 2px 2px 0px;
+    border-radius: 6px;
+}
+
+#SettingsScrollArea QScrollBar::handle:vertical {
+    background: #565e6d;
+    border-radius: 4px;
+    min-height: 40px;
+    margin: 2px;
+}
+
+#SettingsScrollArea QScrollBar::handle:vertical:hover {
+    background: #7d8695;
+}
+
 QScrollBar:vertical {
     background: transparent;
     width: 10px;

@@ -2,8 +2,8 @@ from dataclasses import asdict
 from pathlib import Path
 from typing import Any, cast
 
-from PyQt6.QtCore import QFileInfo, QSize, Qt, pyqtSignal
-from PyQt6.QtGui import QColor, QIcon, QKeySequence, QPainter, QPen, QShortcut
+from PyQt6.QtCore import QEvent, QFileInfo, QPointF, QRect, QSize, Qt, pyqtSignal
+from PyQt6.QtGui import QColor, QIcon, QKeySequence, QLinearGradient, QPainter, QPen, QShortcut
 from PyQt6.QtWidgets import (
     QCheckBox,
     QComboBox,
@@ -26,6 +26,74 @@ from PyQt6.QtWidgets import (
     QVBoxLayout,
     QWidget,
 )
+
+
+class ScrollEdgeFade(QWidget):
+    """Fade the edges of a scroll area where its content continues.
+
+    A dense settings page looks like a full page whether or not more follows,
+    and a thin scrollbar is easy to miss. Content dissolving into the edge
+    reads as "there is more here" without having to be noticed first.
+
+    Drawn on the viewport, so it never covers the scrollbar, and transparent
+    to the mouse so it cannot swallow clicks on the controls underneath.
+    """
+
+    FADE_HEIGHT = 30
+    MAX_ALPHA = 245
+
+    def __init__(self, scroll_area: QScrollArea, color: str = "#202228"):
+        super().__init__(scroll_area.viewport())
+        self._scroll_area = scroll_area
+        self._color = QColor(color)
+        self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+
+        scroll_area.viewport().installEventFilter(self)
+        scroll_bar = scroll_area.verticalScrollBar()
+        scroll_bar.valueChanged.connect(self.update)
+        scroll_bar.rangeChanged.connect(lambda *_: self.update())
+        self._match_viewport()
+
+    def eventFilter(self, watched, event):
+        if event.type() == QEvent.Type.Resize:
+            self._match_viewport()
+        return False
+
+    def _match_viewport(self):
+        viewport = self._scroll_area.viewport()
+        self.setGeometry(0, 0, viewport.width(), viewport.height())
+        self.raise_()
+
+    def paintEvent(self, event):
+        scroll_bar = self._scroll_area.verticalScrollBar()
+        if scroll_bar.maximum() <= scroll_bar.minimum():
+            return  # Everything already fits; a fade would be a lie.
+
+        painter = QPainter(self)
+        if scroll_bar.value() > scroll_bar.minimum():
+            self._paint_edge(painter, at_top=True)
+        if scroll_bar.value() < scroll_bar.maximum():
+            self._paint_edge(painter, at_top=False)
+
+    def _paint_edge(self, painter: QPainter, at_top: bool):
+        height = min(self.FADE_HEIGHT, self.height())
+        if height <= 0 or self.width() <= 0:
+            return
+
+        top = 0 if at_top else self.height() - height
+        rect = QRect(0, top, self.width(), height)
+
+        solid = QColor(self._color)
+        solid.setAlpha(self.MAX_ALPHA)
+        clear = QColor(self._color)
+        clear.setAlpha(0)
+
+        # QPointF, not QPoint: PyQt6 6.10 hard-crashes the process rather than
+        # raising TypeError when QLinearGradient is handed integer points.
+        gradient = QLinearGradient(QPointF(rect.topLeft()), QPointF(rect.bottomLeft()))
+        gradient.setColorAt(0.0, solid if at_top else clear)
+        gradient.setColorAt(1.0, clear if at_top else solid)
+        painter.fillRect(rect, gradient)
 
 
 class NoScrollSpinBox(QSpinBox):
@@ -291,10 +359,15 @@ class SettingsEditorPanel(QFrame):
         content_layout.addLayout(right_column, 1)
 
         content_scroll = QScrollArea()
+        content_scroll.setObjectName("SettingsScrollArea")
         content_scroll.setWidgetResizable(True)
         content_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        # Always reserve the track, so the page never reflows the moment it
+        # becomes scrollable and the bar has somewhere constant to appear.
+        content_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOn)
         content_scroll.setFrameShape(QFrame.Shape.NoFrame)
         content_scroll.setWidget(content)
+        self._scroll_fade = ScrollEdgeFade(content_scroll)
 
         self.close_button = QPushButton("Close")
         self.close_button.setCursor(Qt.CursorShape.PointingHandCursor)
