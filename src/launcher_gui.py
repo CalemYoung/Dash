@@ -318,7 +318,6 @@ class MainWindow(QMainWindow):
         self._download_update_action = None
         self._update_downloader: UpdateDownloader | None = None
         self._update_progress = None
-        self._pending_installer: str | None = None
         self._program_discovery_thread = None
         self._program_discovery_progress = None
 
@@ -330,7 +329,10 @@ class MainWindow(QMainWindow):
 
         # Setup tray icon (with retry logic for Windows startup)
         self._setup_tray()
-        QTimer.singleShot(2500, self.check_for_updates)
+        # One check per process start; the result is surfaced once, as a tray
+        # notification, and never re-asked during the session.
+        if self.settings.general.check_updates_on_startup:
+            QTimer.singleShot(2500, self.check_for_updates)
 
     @staticmethod
     def _format_shortcut(shortcut):
@@ -561,10 +563,6 @@ class MainWindow(QMainWindow):
         self.hide()
         self.search_input_widget.clear()
         self.user_text = ""
-        # A verified update that arrived while the launcher was open installs
-        # now that it is out of the way.
-        if self._pending_installer and self.settings.general.auto_install_updates:
-            QTimer.singleShot(500, lambda: self._install_now(self._pending_installer) if self._pending_installer else None)
 
     def activate_launcher(self):
         was_visible = self.isVisible()
@@ -693,7 +691,7 @@ class MainWindow(QMainWindow):
         self.tray_menu.addAction(quit_action)
 
         tray.setContextMenu(self.tray_menu)
-        tray.messageClicked.connect(self.open_latest_release)
+        tray.messageClicked.connect(self._on_update_message_clicked)
 
         # Left click - show Dash
         tray.activated.connect(lambda reason: self.activate_launcher() if reason == QSystemTrayIcon.ActivationReason.Trigger else None)
@@ -754,10 +752,6 @@ class MainWindow(QMainWindow):
 
         if manual:
             self._show_update_available(release)
-        elif self._can_install(release) and self.settings.general.auto_install_updates:
-            # Fetch quietly now; the install waits for a moment when the
-            # launcher is not in use.
-            self.install_update(manual=False)
         elif self.tray is not None:
             action = "Click to install." if self._can_install(release) else "Click to open the release."
             self.tray.showMessage(
@@ -766,6 +760,16 @@ class MainWindow(QMainWindow):
                 QSystemTrayIcon.MessageIcon.Information,
                 10000,
             )
+
+    def _on_update_message_clicked(self):
+        """The startup notification was clicked: ask, never install unasked."""
+        release = self._latest_release
+        if release is None:
+            return
+        if self._can_install(release):
+            self._show_update_available(release)
+        else:
+            self.open_latest_release()
 
     def _can_install(self, release: ReleaseInfo | None) -> bool:
         """Silent install needs the packaged build and a verifiable installer."""
@@ -779,9 +783,7 @@ class MainWindow(QMainWindow):
         action.setVisible(release is not None)
         if release is None:
             return
-        if self._pending_installer:
-            action.setText(f"Restart to Update to Dash {release.version}")
-        elif self._can_install(release):
+        if self._can_install(release):
             action.setText(f"Install Dash {release.version}...")
         else:
             action.setText(f"Download Dash {release.version}...")
@@ -812,12 +814,11 @@ class MainWindow(QMainWindow):
 
     # -- installing updates ---------------------------------------------------
 
-    def install_update(self, manual: bool):
+    def install_update(self, manual: bool = True):
         """Download the latest installer, verify it, then install and restart.
 
-        Manual installs show progress and install as soon as the download is
-        verified. Automatic ones are silent and wait until the launcher is
-        hidden, so an update never interrupts a search.
+        Only ever runs because the user asked (the tray item, the update
+        dialog, or the notification). Progress is shown throughout.
         """
         release = self._latest_release
         if release is None:
@@ -825,21 +826,15 @@ class MainWindow(QMainWindow):
         if not self._can_install(release):
             self.open_latest_release()
             return
-        if self._pending_installer:
-            self._install_now(self._pending_installer)
-            return
         if self._update_downloader is not None:
-            if manual:
-                self._show_download_progress()
+            self._show_download_progress()
             return
 
         self._update_downloader = UpdateDownloader(self._update_network, release, self)
         self._update_downloader.finished.connect(self._on_update_downloaded)
         self._update_downloader.failed.connect(self._on_update_failed)
         self._update_downloader.progress.connect(self._on_update_progress)
-        self._update_manual = manual
-        if manual:
-            self._show_download_progress()
+        self._show_download_progress()
         self._update_downloader.start()
 
     def _show_download_progress(self):
@@ -879,38 +874,19 @@ class MainWindow(QMainWindow):
         self._close_download_progress()
 
     def _on_update_failed(self, message: str):
-        manual = getattr(self, "_update_manual", False)
         self._update_downloader = None
         self._close_download_progress()
         print(f"Update failed: {message}")
-        if manual:
-            QMessageBox.warning(self, "Updating Dash", f"The update could not be installed.\n\n{message}")
+        QMessageBox.warning(self, "Updating Dash", f"The update could not be installed.\n\n{message}")
 
     def _on_update_downloaded(self, installer_path: str):
-        manual = getattr(self, "_update_manual", False)
         self._update_downloader = None
         self._close_download_progress()
-        self._pending_installer = installer_path
-        self._refresh_update_action()
-
-        if manual or self._launcher_idle():
-            self._install_now(installer_path)
-        elif self.tray is not None:
-            version = self._latest_release.version if self._latest_release else ""
-            self.tray.showMessage(
-                "Dash Update Ready",
-                f"Dash {version} will install when you close the launcher.",
-                QSystemTrayIcon.MessageIcon.Information,
-                6000,
-            )
-
-    def _launcher_idle(self) -> bool:
-        return not self.isVisible() and self._editor_panel is None
+        self._install_now(installer_path)
 
     def _install_now(self, installer_path: str):
         if not Path(installer_path).exists():
-            self._pending_installer = None
-            self._refresh_update_action()
+            QMessageBox.warning(self, "Updating Dash", "The downloaded installer is missing.")
             return
         version = self._latest_release.version if self._latest_release else ""
         if self.tray is not None:
@@ -921,8 +897,6 @@ class MainWindow(QMainWindow):
                 4000,
             )
         if not launch_installer(installer_path):
-            self._pending_installer = None
-            self._refresh_update_action()
             QMessageBox.warning(self, "Updating Dash", "The installer could not be started.")
             return
         app = QApplication.instance()
@@ -971,6 +945,10 @@ class MainWindow(QMainWindow):
         self.settings = settings
         self.setWindowOpacity(settings.ui.window_opacity)
         self.icon_manager.settings = settings
+        # The command manager reads sort order and case handling from its own
+        # settings reference, so hand it the new object and rebuild the trie.
+        self.cmd_manager.settings = settings
+        self.cmd_manager.reload_command_trie()
         if self._hotkey_listener is not None:
             self._hotkey_listener.update_hotkey(settings.general.hotkey)
         self.edit_shortcut.setKeys(_key_sequences(settings.shortcuts.edit_selected_command))

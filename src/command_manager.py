@@ -613,25 +613,37 @@ class CommandManager:
         self.commands = commands
 
         # Reset and rebuild trie
-        self.lookup_trie = CommandTrie()
+        self.lookup_trie = CommandTrie(case_sensitive=not self.settings.search.ignore_case)
         for keyword, command_name in keyword_to_command.items():
             self.lookup_trie.insert(keyword, command_name)
 
     # -------------------------------------------------------------- searching
 
+    def _is_exact_match(self, command: dict, text: str) -> bool:
+        """True if `text` is the whole of the command's name or one of its aliases."""
+        normalize = self.lookup_trie.normalize
+        wanted = normalize(text)
+        return any(normalize(str(keyword)) == wanted for keyword in (command.get("name", ""), *command.get("aliases", [])))
+
     def find_matching_commands(self, text: str) -> list[dict]:
         """Return the commands whose name or alias starts with `text`.
 
-        Ordered by the `sort_results` setting: most-run first (ties broken by
-        name) or purely by name. Counts are always tracked, so switching to
-        popularity later still reflects past use.
+        A command whose name or alias is exactly what was typed always comes
+        first: an alias is a promise that those letters mean that command.
+        The rest follow the `sort_results` setting: most-run first (ties by
+        name) or purely by name.
         """
         max_results = self.settings.search.max_results
         command_names = self.lookup_trie.search_prefix(text, max_results=max_results)
         results = [self.commands[name] for name in command_names if name in self.commands]
-        if self.settings.search.sort_results == "popularity":
-            return sorted(results, key=lambda x: (-_safe_run_count(x.get("times_executed")), x["name"].lower()))
-        return sorted(results, key=lambda x: x["name"].lower())
+
+        def order(command: dict):
+            exact = 0 if self._is_exact_match(command, text) else 1
+            if self.settings.search.sort_results == "popularity":
+                return (exact, -_safe_run_count(command.get("times_executed")), command["name"].lower())
+            return (exact, command["name"].lower())
+
+        return sorted(results, key=order)
 
     def get_matching_commands(self, main_window: "MainWindow", text):
         results = self.find_matching_commands(text)

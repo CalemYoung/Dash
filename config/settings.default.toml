@@ -1,9 +1,9 @@
 [general]
 hotkey = "Alt+F"
 show_on_screen_with_mouse = false
-# Download verified updates in the background and install them while the
-# launcher is hidden. Off: updates are only offered, never installed unasked.
-auto_install_updates = true
+# Look for a new release once each time Dash starts and show a single tray
+# notification if there is one. Nothing is installed until you choose to.
+check_updates_on_startup = true
 
 [ui]
 program_width = 600
@@ -25,6 +25,8 @@ clock_date_text_color = "#9da4b0"
 [search]
 max_results = 20
 autocomplete = true
+# Match names and aliases regardless of capitalisation.
+ignore_case = true
 # "popularity" puts the most-run matches first (ties by name); "name" is alphabetical.
 sort_results = "popularity"
 show_descriptions = true

@@ -36,14 +36,19 @@ class TrieNode:
 
 
 class CommandTrie:
-    def __init__(self):
+    def __init__(self, case_sensitive: bool = False):
         self.root = TrieNode()
+        self.case_sensitive = case_sensitive
+
+    def normalize(self, text: str) -> str:
+        """Keywords and prefixes are compared in this form."""
+        return text if self.case_sensitive else text.lower()
 
     def insert(self, keyword: str, command_id: str):
         """Insert a keyword that points to a command ID"""
         node = self.root
 
-        for char in keyword.lower():
+        for char in self.normalize(keyword):
             if char not in node.children:
                 node.children[char] = TrieNode()
             node = node.children[char]
@@ -55,7 +60,7 @@ class CommandTrie:
         """Search for keywords matching prefix, return unique command IDs"""
         node = self.root
 
-        for char in prefix.lower():
+        for char in self.normalize(prefix):
             if char not in node.children:
                 return []
             node = node.children[char]
@@ -74,7 +79,7 @@ class CommandTrie:
         previous_count = total_command_count
         is_dead_end = False
 
-        for index, character in enumerate(prefix.lower()):
+        for index, character in enumerate(self.normalize(prefix)):
             typed_prefix = prefix[: index + 1]
             if is_dead_end:
                 steps.append(TrieStep(typed_prefix, 0, 0, False))

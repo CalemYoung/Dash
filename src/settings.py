@@ -50,7 +50,7 @@ def _from_section(cls, data: dict):
 class GeneralSettings:
     hotkey: str = DEFAULT_SETTINGS["general"]["hotkey"]
     show_on_screen_with_mouse: bool = DEFAULT_SETTINGS["general"]["show_on_screen_with_mouse"]
-    auto_install_updates: bool = DEFAULT_SETTINGS["general"]["auto_install_updates"]
+    check_updates_on_startup: bool = DEFAULT_SETTINGS["general"]["check_updates_on_startup"]
 
 
 @dataclass
@@ -78,6 +78,7 @@ SORT_RESULTS_OPTIONS = ("popularity", "name")
 class SearchSettings:
     max_results: int = DEFAULT_SETTINGS["search"]["max_results"]
     autocomplete: bool = DEFAULT_SETTINGS["search"]["autocomplete"]
+    ignore_case: bool = DEFAULT_SETTINGS["search"]["ignore_case"]
     sort_results: str = DEFAULT_SETTINGS["search"]["sort_results"]
     show_descriptions: bool = DEFAULT_SETTINGS["search"]["show_descriptions"]
     show_run_counter: bool = DEFAULT_SETTINGS["search"]["show_run_counter"]

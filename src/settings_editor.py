@@ -431,11 +431,12 @@ class SettingsEditorPanel(QFrame):
                     self._check(self._settings.general.show_on_screen_with_mouse),
                 ),
                 (
-                    "Install updates automatically",
-                    "general.auto_install_updates",
-                    self._check(self._settings.general.auto_install_updates),
+                    "Check for updates at startup",
+                    "general.check_updates_on_startup",
+                    self._check(self._settings.general.check_updates_on_startup),
                 ),
                 ("Autocomplete", "search.autocomplete", self._check(self._settings.search.autocomplete)),
+                ("Ignore capitalisation", "search.ignore_case", self._check(self._settings.search.ignore_case)),
                 (
                     "Sort results by",
                     "search.sort_results",
@@ -526,7 +527,7 @@ class SettingsEditorPanel(QFrame):
             general=GeneralSettings(
                 hotkey=self._value("general.hotkey"),
                 show_on_screen_with_mouse=bool(self._value("general.show_on_screen_with_mouse")),
-                auto_install_updates=bool(self._value("general.auto_install_updates")),
+                check_updates_on_startup=bool(self._value("general.check_updates_on_startup")),
             ),
             ui=UISettings(
                 program_width=self._value("ui.program_width"),
@@ -547,6 +548,7 @@ class SettingsEditorPanel(QFrame):
             search=SearchSettings(
                 max_results=self._value("search.max_results"),
                 autocomplete=self._value("search.autocomplete"),
+                ignore_case=bool(self._value("search.ignore_case")),
                 sort_results=self._value("search.sort_results"),
                 show_descriptions=self._value("search.show_descriptions"),
                 show_run_counter=self._value("search.show_run_counter"),

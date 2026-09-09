@@ -68,11 +68,12 @@ matches. Turn it on under Settings.
 Use the system tray menu to open settings or manage commands. Dash stores your
 configuration in `%APPDATA%\Dash`, so upgrades keep your settings and commands.
 
-Dash checks GitHub for new releases when it starts. By default it downloads
-the installer in the background, verifies it against the release's SHA-256
-checksum, and installs it while the launcher is hidden, restarting itself
-afterwards. Turn off "Install updates automatically" in Settings to be asked
-first, or use "Check for Updates..." in the tray menu at any time.
+Dash checks GitHub for a new release once each time it starts and shows a
+single tray notification if there is one. Nothing is installed until you
+choose "Install and Restart", at which point the installer is downloaded,
+verified against the release's SHA-256 checksum, and run. Turn off "Check for
+updates at startup" in Settings to stop the check, or use "Check for
+Updates..." in the tray menu at any time.
 
 ## Development
 
