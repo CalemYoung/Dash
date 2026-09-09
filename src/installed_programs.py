@@ -24,6 +24,11 @@ FRIENDLY_EXE_NAMES = {
     "outlook": "Outlook",
     "powerpnt": "PowerPoint",
     "winword": "Word",
+    # Store editions registered under App Paths; naming them like the
+    # suggestions lets the merge drop them as duplicates.
+    "mspaint": "Paint",
+    "snippingtool": "Snipping Tool",
+    "notepad": "Notepad",
 }
 
 # Substrings that flag an entry as a support tool rather than an app someone
@@ -71,36 +76,39 @@ WINDOWS_SYSTEM_DIR_MARKERS = (
 
 # Personal folders, looked up by KNOWNFOLDERID rather than assembled from
 # USERPROFILE - any of these can be redirected to OneDrive or another drive.
+#
+# Aliases lead with the shortest thing someone would actually type ("dl",
+# "tm"); the longer forms are there for people who know the exe name.
 SUGGESTED_FOLDERS = (
-    ("Downloads", "{374DE290-123F-4565-9164-39C4925E467B}", ["downloads", "dl"]),
-    ("Desktop", "{B4BFCC3A-DB2C-424C-B029-7FE99A87C641}", ["desktop"]),
-    ("Documents", "{FDD39AD0-238F-46AF-ADB4-6C85480369C7}", ["documents", "docs"]),
-    ("Pictures", "{33E28130-4E1E-4676-835A-98395C3BC3BB}", ["pictures", "photos"]),
-    ("Videos", "{18989B1D-99B5-455B-841C-AB7C74E4DDFC}", ["videos"]),
+    ("Downloads", "{374DE290-123F-4565-9164-39C4925E467B}", ["dl", "downloads"]),
+    ("Desktop", "{B4BFCC3A-DB2C-424C-B029-7FE99A87C641}", ["dt", "desktop"]),
+    ("Documents", "{FDD39AD0-238F-46AF-ADB4-6C85480369C7}", ["docs", "documents"]),
+    ("Pictures", "{33E28130-4E1E-4676-835A-98395C3BC3BB}", ["pics", "photos", "pictures"]),
+    ("Videos", "{18989B1D-99B5-455B-841C-AB7C74E4DDFC}", ["vids", "videos"]),
     ("Music", "{4BD8D571-6D19-48D3-BE97-422220080E43}", ["music"]),
 )
 
 # Built-in tools worth launching by name. These live in System32, which the
 # registry scan deliberately skips, so they never turn up on their own.
 SUGGESTED_TOOLS = (
-    ("Remote Desktop", "mstsc.exe", ["rdp", "mstsc"], "Connect to another PC"),
-    ("Task Manager", "taskmgr.exe", ["taskmgr"], "View running apps and processes"),
-    ("Control Panel", "control.exe", ["control"], "Open the Windows Control Panel"),
-    ("File Explorer", "explorer.exe", ["explorer", "files"], "Browse your files"),
-    ("Command Prompt", "cmd.exe", ["cmd"], "Open a command prompt"),
-    ("PowerShell", "WindowsPowerShell\\v1.0\\powershell.exe", ["powershell", "pwsh"], "Open PowerShell"),
-    ("Snipping Tool", "SnippingTool.exe", ["snip", "screenshot"], "Capture part of the screen"),
-    ("Calculator", "calc.exe", ["calculator"], "Open the Windows calculator"),
-    ("Notepad", "notepad.exe", ["notepad"], "Open Notepad"),
-    ("Paint", "mspaint.exe", ["paint"], "Open Paint"),
-    ("Magnifier", "magnify.exe", ["magnifier", "zoom"], "Magnify part of the screen"),
+    ("Remote Desktop", "mstsc.exe", ["rdp", "mstsc", "remote"], "Connect to another PC"),
+    ("Task Manager", "taskmgr.exe", ["tm", "taskmgr", "tasks"], "View running apps and processes"),
+    ("Control Panel", "control.exe", ["cp", "control"], "Open the Windows Control Panel"),
+    ("File Explorer", "explorer.exe", ["fe", "explorer", "files"], "Browse your files"),
+    ("Command Prompt", "cmd.exe", ["cmd", "prompt"], "Open a command prompt"),
+    ("PowerShell", "WindowsPowerShell\\v1.0\\powershell.exe", ["ps", "powershell"], "Open PowerShell"),
+    ("Snipping Tool", "SnippingTool.exe", ["snip", "ss", "screenshot"], "Capture part of the screen"),
+    ("Calculator", "calc.exe", ["calc"], "Open the Windows calculator"),
+    ("Notepad", "notepad.exe", ["np", "notepad"], "Open Notepad"),
+    ("Paint", "mspaint.exe", ["mspaint", "draw"], "Open Paint"),
+    ("Magnifier", "magnify.exe", ["mag", "magnify", "zoom"], "Magnify part of the screen"),
     ("On-Screen Keyboard", "osk.exe", ["osk", "keyboard"], "Show the on-screen keyboard"),
     ("Character Map", "charmap.exe", ["charmap", "symbols"], "Look up special characters"),
-    ("Disk Cleanup", "cleanmgr.exe", ["cleanmgr", "diskcleanup"], "Free up disk space"),
-    ("Resource Monitor", "resmon.exe", ["resmon"], "Watch CPU, memory and disk use"),
-    ("System Information", "msinfo32.exe", ["sysinfo", "msinfo"], "View system specifications"),
-    ("Device Manager", "devmgmt.msc", ["devices", "devmgmt"], "Manage hardware and drivers"),
-    ("Registry Editor", "regedit.exe", ["regedit", "registry"], "Edit the Windows registry"),
+    ("Disk Cleanup", "cleanmgr.exe", ["cleanup", "cleanmgr"], "Free up disk space"),
+    ("Resource Monitor", "resmon.exe", ["resmon", "resources"], "Watch CPU, memory and disk use"),
+    ("System Information", "msinfo32.exe", ["sysinfo", "msinfo", "specs"], "View system specifications"),
+    ("Device Manager", "devmgmt.msc", ["dm", "devmgmt", "devices"], "Manage hardware and drivers"),
+    ("Registry Editor", "regedit.exe", ["regedit", "reg", "registry"], "Edit the Windows registry"),
 )
 
 
@@ -138,6 +146,27 @@ def discover_windows_suggestions() -> list[dict]:
         suggestions.append(_suggestion(name, path, aliases, description))
 
     return suggestions
+
+
+def merge_program_candidates(suggestions: list[dict], discovered: list[dict]) -> list[dict]:
+    """Suggestions first, then discovered programs that do not repeat one.
+
+    Start Menu shortcuts for built-in tools (Task Manager, Character Map...)
+    resolve to the same executables the suggestions do, and Store editions of
+    those tools (Notepad) share the name with a different path. Either way the
+    user only wants one entry, and the suggestion carries the better aliases.
+    """
+    taken_locations = {_path_key(Path(str(candidate.get("location", "")))) for candidate in suggestions}
+    taken_names = {str(candidate.get("name", "")).casefold() for candidate in suggestions}
+
+    merged = list(suggestions)
+    for candidate in discovered:
+        if _path_key(Path(str(candidate.get("location", "")))) in taken_locations:
+            continue
+        if str(candidate.get("name", "")).casefold() in taken_names:
+            continue
+        merged.append(candidate)
+    return merged
 
 
 def _suggestion(name: str, path: Path, aliases: list[str], description: str) -> dict:
@@ -183,6 +212,28 @@ def _windows_tool_path(relative: str) -> Path | None:
         candidate = base / relative
         if candidate.is_file():
             return candidate
+    # Windows 11 moved Paint and Snipping Tool out of System32 into Store
+    # packages. Their app execution alias survives package updates, whereas the
+    # App Paths target carries the package version and breaks on the next one.
+    exe_name = Path(relative).name
+    alias = Path(os.environ.get("LOCALAPPDATA", "")) / "Microsoft" / "WindowsApps" / exe_name
+    if alias.is_file():
+        return alias
+    return _app_paths_lookup(exe_name)
+
+
+def _app_paths_lookup(exe_name: str) -> Path | None:
+    if winreg is None:
+        return None
+    for hive, view_flag in _registry_views():
+        try:
+            root = winreg.OpenKey(hive, APP_PATHS_ROOT, 0, winreg.KEY_READ | view_flag)
+        except OSError:
+            continue
+        with root:
+            target = _app_path_target(root, exe_name)
+        if target is not None:
+            return target
     return None
 
 
@@ -212,6 +263,11 @@ def discover_recent_program_commands(days: int = 365, max_commands: int | None =
     commands: list[dict] = []
     seen_locations: set[str] = set()
     seen_names: set[str] = set()
+
+    # The installer adds a Start Menu shortcut for Dash itself; a launcher
+    # command that launches the launcher is never wanted.
+    if getattr(sys, "frozen", False):
+        seen_locations.add(_path_key(Path(sys.executable)))
 
     try:
         import win32com.client
@@ -294,13 +350,26 @@ def _shortcut_target(shortcut_path: Path, shell) -> Path | None:
     try:
         shortcut = shell.CreateShortcut(str(shortcut_path))
         target = str(shortcut.TargetPath or "").strip()
+        arguments = str(shortcut.Arguments or "").strip()
     except Exception:
         return None
 
     if not target:
         return None
 
-    return _existing_exe_path(target)
+    path = _existing_exe_path(target)
+    # A shortcut that hands arguments to a Windows tool ("Edit Commands" ->
+    # notepad.exe <file>, "Install Tools" -> cmd.exe /c ...) is a task, not an
+    # app. Dash only records the bare exe, which would just duplicate the
+    # built-in tool under a misleading name.
+    if path is not None and arguments and _in_windows_dir(path):
+        return None
+    return path
+
+
+def _in_windows_dir(path: Path) -> bool:
+    windows_dir = Path(os.environ.get("SystemRoot", r"C:\Windows"))
+    return _path_key(path).startswith(_path_key(windows_dir) + os.sep)
 
 
 def _app_paths_registry_targets() -> list[tuple[str, Path]]:

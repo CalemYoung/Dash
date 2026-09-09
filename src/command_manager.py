@@ -346,6 +346,11 @@ class CommandManager:
         """Append selected program candidates without changing existing commands."""
         commands = self._read_raw_commands()
         existing_locations = self._command_locations(commands)
+        # Names and aliases claimed earlier in this batch. validate_command
+        # only knows about commands already on disk, so without this two
+        # candidates sharing a name (a suggestion and a Start Menu shortcut for
+        # the same tool) would both be written.
+        batch_keywords: set[str] = set()
         imported: list[str] = []
         skipped: list[str] = []
 
@@ -354,7 +359,10 @@ class CommandManager:
             if location in existing_locations:
                 skipped.append(candidate.get("name", ""))
                 continue
-            if self.validate_command(candidate):
+            keywords = {
+                str(keyword).strip().casefold() for keyword in [candidate.get("name", ""), *candidate.get("aliases", [])]
+            }
+            if keywords & batch_keywords or self.validate_command(candidate):
                 skipped.append(candidate.get("name", ""))
                 continue
             entry = {
@@ -370,6 +378,7 @@ class CommandManager:
                 entry["icon"] = candidate["icon"]
             commands.append(entry)
             existing_locations.add(location)
+            batch_keywords |= keywords
             imported.append(candidate["name"])
 
         if imported:
@@ -569,6 +578,10 @@ class CommandManager:
     def existing_command_locations(self) -> set[str]:
         """Return normalized locations of user commands already stored on disk."""
         return self._command_locations(self._read_raw_commands())
+
+    def has_user_commands(self) -> bool:
+        """Whether the user has added any commands of their own (system commands excluded)."""
+        return bool(self._read_raw_commands())
 
     # ------------------------------------------------------------------ icons
 

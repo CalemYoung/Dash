@@ -33,6 +33,11 @@ LATEST_RELEASE_PAGE = "https://github.com/CalemYoung/Dash/releases/latest"
 TRAY_SETUP_RETRIES = 20
 TRAY_SETUP_RETRY_MS = 3000
 
+# Written beside commands.toml once the first-run auto-populate offer has been
+# shown, so declining it is respected on the next start.
+FIRST_RUN_MARKER_FILENAME = ".first_run_complete"
+FIRST_RUN_POPULATE_DELAY_MS = 800
+
 # Vertical padding of #ResultsList in style.qss; the list height is sized to
 # whole rows so the last visible row is never cut through its text.
 RESULTS_LIST_PADDING_V = 4
@@ -334,6 +339,10 @@ class MainWindow(QMainWindow):
         # notification, and never re-asked during the session.
         if self.settings.general.check_updates_on_startup:
             QTimer.singleShot(2500, self.check_for_updates)
+        # A fresh install has nothing to launch yet, so offer the installed
+        # program scan once instead of leaving an empty launcher.
+        if self._first_run_populate_pending():
+            QTimer.singleShot(FIRST_RUN_POPULATE_DELAY_MS, self._offer_first_run_populate)
 
     @staticmethod
     def _format_shortcut(shortcut):
@@ -1111,6 +1120,25 @@ class MainWindow(QMainWindow):
             self.activate_launcher()
         self.open_editor(None)
 
+    def _first_run_marker_path(self) -> Path:
+        return self.cmd_manager.command_file_path.parent / FIRST_RUN_MARKER_FILENAME
+
+    def _first_run_populate_pending(self) -> bool:
+        if self._first_run_marker_path().exists():
+            return False
+        return not self.cmd_manager.has_user_commands()
+
+    def _offer_first_run_populate(self):
+        # Mark before showing: the offer is made once whether it is accepted or not.
+        marker = self._first_run_marker_path()
+        try:
+            marker.parent.mkdir(parents=True, exist_ok=True)
+            marker.write_text("Dash offered to auto-populate commands on its first start.\n", encoding="utf-8")
+        except OSError:
+            pass
+        self.activate_launcher()
+        self.choose_recent_programs()
+
     def choose_recent_programs(self):
         if self._program_discovery_thread is not None:
             return
@@ -1152,12 +1180,12 @@ class MainWindow(QMainWindow):
         self._show_program_import_dialog(candidates)
 
     def _show_program_import_dialog(self, candidates: list[dict]):
-        from .installed_programs import discover_windows_suggestions, filter_new_program_commands
+        from .installed_programs import discover_windows_suggestions, filter_new_program_commands, merge_program_candidates
 
         # Suggestions lead: they are the handful of entries most people want,
         # and they would be lost partway down a list of installed programs.
         # Cheap enough to resolve here rather than on the scan thread.
-        candidates = discover_windows_suggestions() + candidates
+        candidates = merge_program_candidates(discover_windows_suggestions(), candidates)
         existing_locations = self.cmd_manager.existing_command_locations()
         candidates = filter_new_program_commands(candidates, existing_locations)
         dialog = ProgramImportDialog(candidates, existing_locations, self.icon_manager, self, command_manager=self.cmd_manager)

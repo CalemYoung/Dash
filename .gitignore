@@ -14,3 +14,6 @@ __pycache__/
 *.pyc
 .venv/
 .vscode/
+
+# First-run auto-populate marker (dev runs write it next to commands.toml)
+config/.first_run_complete
