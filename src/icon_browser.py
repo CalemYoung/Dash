@@ -11,6 +11,8 @@ from PyQt6.QtWidgets import QApplication, QMainWindow, QWidget, QVBoxLayout, QHB
 from PyQt6.QtWidgets import QFrame, QDialog, QDialogButtonBox, QFileDialog, QLabel, QCheckBox, QPushButton
 from PyQt6.QtSvg import QSvgRenderer
 
+from .window_placement import fit_within_screen
+
 with warnings.catch_warnings():
     warnings.filterwarnings(
         "ignore",
@@ -807,9 +809,7 @@ class LibraryPickerDialog(DragToMoveMixin, QDialog):
     def showEvent(self, event):
         # Frameless windows are not placed or focused by the window manager
         super().showEvent(event)
-        if self.parent() is not None:
-            center = self.parent().frameGeometry().center()
-            self.move(center - self.rect().center())
+        fit_within_screen(self, self.parent().frameGeometry().center() if self.parent() is not None else None)
         self.raise_()
         self.activateWindow()
         self.search_box.setFocus()
@@ -978,9 +978,7 @@ class IconStyleDialog(DragToMoveMixin, QDialog):
 
     def showEvent(self, event):
         super().showEvent(event)
-        if self.parent() is not None:
-            center = self.parent().frameGeometry().center()
-            self.move(center - self.rect().center())
+        fit_within_screen(self, self.parent().frameGeometry().center() if self.parent() is not None else None)
         self.raise_()
         self.activateWindow()
 
@@ -1215,6 +1213,11 @@ class IconStudio(DragToMoveMixin, QMainWindow):
         name = self._library_member.name.lower() if self._library_member is not None else Path(str(recipe["source"])).name
         self._set_icon(base, name)
         return True
+
+    def showEvent(self, event):
+        # Frameless windows are not placed by the window manager.
+        super().showEvent(event)
+        fit_within_screen(self)
 
     def _accept(self):
         self.accepted.emit()

@@ -6,6 +6,7 @@ from PyQt6.QtGui import QBrush, QIcon, QAction, QDesktopServices, QMouseEvent, Q
 from PyQt6.QtNetwork import QNetworkAccessManager, QNetworkReply, QNetworkRequest
 from .settings import Settings
 from .settings_editor import ExportCommandsDialog, ImportCommandsDialog, ProgramImportDialog, SettingsEditorPanel
+from .window_placement import available_geometry_for, clamp_size_to_screen, move_within_screen
 from .icon_manager import IconManager
 from .command_trie import TrieSnapshot
 from typing import cast
@@ -932,13 +933,13 @@ class MainWindow(QMainWindow):
         self.view_stack.addWidget(panel)
         self.view_stack.setCurrentWidget(panel)
         self._pre_editor_size = self.size()
-        available_geometry = self.screen().availableGeometry()
-        editor_width = min(max(760, self.settings.ui.program_width), available_geometry.width() - 32)
-        editor_height = min(max(720, self.settings.ui.editor_height), available_geometry.height() - 32)
-        self.setFixedSize(editor_width, editor_height)
-        editor_geometry = self.frameGeometry()
-        editor_geometry.moveCenter(previous_center)
-        self.move(editor_geometry.topLeft())
+        editor_size = clamp_size_to_screen(
+            max(760, self.settings.ui.program_width),
+            max(720, self.settings.ui.editor_height),
+            available_geometry_for(self),
+        )
+        self.setFixedSize(editor_size)
+        move_within_screen(self, editor_size, previous_center)
         panel.setFocus()
 
     def _apply_settings(self, settings):
@@ -1151,8 +1152,12 @@ class MainWindow(QMainWindow):
         self._show_program_import_dialog(candidates)
 
     def _show_program_import_dialog(self, candidates: list[dict]):
-        from .installed_programs import filter_new_program_commands
+        from .installed_programs import discover_windows_suggestions, filter_new_program_commands
 
+        # Suggestions lead: they are the handful of entries most people want,
+        # and they would be lost partway down a list of installed programs.
+        # Cheap enough to resolve here rather than on the scan thread.
+        candidates = discover_windows_suggestions() + candidates
         existing_locations = self.cmd_manager.existing_command_locations()
         candidates = filter_new_program_commands(candidates, existing_locations)
         dialog = ProgramImportDialog(candidates, existing_locations, self.icon_manager, self, command_manager=self.cmd_manager)
@@ -1269,7 +1274,13 @@ class MainWindow(QMainWindow):
         # Pin the window size: the alias grid resizes with the window, so an
         # unconstrained window would grow without bound.
         self._pre_editor_size = self.size()
-        self.setFixedSize(self.settings.ui.program_width, self.settings.ui.editor_height)
+        editor_size = clamp_size_to_screen(
+            self.settings.ui.program_width,
+            self.settings.ui.editor_height,
+            available_geometry_for(self),
+        )
+        self.setFixedSize(editor_size)
+        move_within_screen(self, editor_size, self._editor_return_center)
         panel.command_name_edit_box.setFocus()
 
     def close_editor(self):
@@ -1285,9 +1296,11 @@ class MainWindow(QMainWindow):
         # size hint, so releasing the constraint would let the window re-expand;
         # the search view height is constant, so a fixed size is safe here.
         self.setFixedSize(self._search_view_size)
-        restored_geometry = self.frameGeometry()
-        restored_geometry.moveCenter(getattr(self, "_editor_return_center", restored_geometry.center()))
-        self.move(restored_geometry.topLeft())
+        move_within_screen(
+            self,
+            self._search_view_size,
+            getattr(self, "_editor_return_center", None),
+        )
         if hasattr(self, "_editor_return_center"):
             del self._editor_return_center
         # Refresh results so any edits show immediately.
@@ -1391,8 +1404,9 @@ class MainWindow(QMainWindow):
     def _snap_results_height(self):
         """Size the results list to whole rows, within the configured height.
 
-        Rows are a constant height, so this settles once per session (and
-        again after a settings change) rather than moving with every keystroke.
+        The box is as tall as the rows it holds, so a single match no longer
+        leaves an empty void beneath it. Only the bottom edge moves: the window
+        is pinned from its top left, so the search box stays put while typing.
         """
         item = self.results_list_widget.item(0)
         if item is None:
@@ -1403,6 +1417,8 @@ class MainWindow(QMainWindow):
         padding = 2 * RESULTS_LIST_PADDING_V
         # Nearest whole number of rows to the configured height, never fewer than one.
         rows = max(1, round((self.settings.ui.results_height - padding) / row_height))
+        # ...and never more rows than there are results to put in them.
+        rows = min(rows, self.results_list_widget.count())
         height = rows * row_height + padding
         if height == self._results_list_height:
             return

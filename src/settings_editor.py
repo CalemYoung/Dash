@@ -173,6 +173,7 @@ from .settings import (
     UISettings,
 )
 from .installed_programs import filter_new_program_commands
+from .window_placement import fit_within_screen
 from .icon_browser import FRAMELESS_DIALOG, RECIPE_KEYS, DragToMoveMixin
 from .command_editor import CommandEditorPanel
 
@@ -234,9 +235,7 @@ class CommandEditDialog(DragToMoveMixin, QDialog):
     def showEvent(self, event):
         super().showEvent(event)
         parent = self.parentWidget()
-        if parent is not None:
-            center = parent.frameGeometry().center()
-            self.move(center - self.rect().center())
+        fit_within_screen(self, parent.frameGeometry().center() if parent is not None else None)
         self.raise_()
         self.activateWindow()
         self.panel.command_name_edit_box.setFocus()
@@ -632,7 +631,15 @@ class ProgramImportDialog(DragToMoveMixin, QDialog):
         self.program_list.setIconSize(QSize(28, 28))
 
         selectable_candidates = filter_new_program_commands(candidates, existing_locations)
-        for candidate in selectable_candidates:
+        suggested = [c for c in selectable_candidates if c.get("suggested")]
+        discovered = [c for c in selectable_candidates if not c.get("suggested")]
+        if suggested:
+            self._add_section_header("Suggested Windows folders and tools")
+        for candidate in suggested:
+            self._add_item(candidate)
+        if suggested and discovered:
+            self._add_section_header("Installed programs")
+        for candidate in discovered:
             self._add_item(candidate)
 
         empty_message = QLabel("No new installed programs were found." if not selectable_candidates else "")
@@ -681,9 +688,7 @@ class ProgramImportDialog(DragToMoveMixin, QDialog):
         # Frameless windows are not placed or focused by the window manager
         super().showEvent(event)
         parent = self.parentWidget()
-        if parent is not None:
-            center = parent.frameGeometry().center()
-            self.move(center - self.rect().center())
+        fit_within_screen(self, parent.frameGeometry().center() if parent is not None else None)
         self.raise_()
         self.activateWindow()
 
@@ -722,12 +727,24 @@ class ProgramImportDialog(DragToMoveMixin, QDialog):
             self.program_list.insertItem(row, item)
         return item
 
+    def _add_section_header(self, text: str):
+        """Add a label row. Headers carry no candidate and no flags, which is
+        how the selection helpers tell them apart from real entries."""
+        item = QListWidgetItem(text)
+        item.setFlags(Qt.ItemFlag.NoItemFlags)
+        font = item.font()
+        font.setBold(True)
+        item.setFont(font)
+        self.program_list.addItem(item)
+
     def _edit_selected(self):
         """Open the selected program in the command editor and apply the result."""
         item = self.program_list.currentItem()
         if item is None or self._command_manager is None:
             return
         candidate = item.data(Qt.ItemDataRole.UserRole)
+        if candidate is None:
+            return
 
         dialog = CommandEditDialog(candidate, self._command_manager, self._icon_manager, self, title="Edit Program")
         if dialog.exec() != QDialog.DialogCode.Accepted or dialog.result_command is None:
@@ -752,7 +769,9 @@ class ProgramImportDialog(DragToMoveMixin, QDialog):
         selected = []
         for index in range(self.program_list.count()):
             item = self.program_list.item(index)
-            if item is not None and item.checkState() == Qt.CheckState.Checked:
+            if item is None or item.data(Qt.ItemDataRole.UserRole) is None:
+                continue
+            if item.checkState() == Qt.CheckState.Checked:
                 selected.append(item.data(Qt.ItemDataRole.UserRole))
         return selected
 
@@ -823,9 +842,7 @@ class ExportCommandsDialog(DragToMoveMixin, QDialog):
     def showEvent(self, event):
         super().showEvent(event)
         parent = self.parentWidget()
-        if parent is not None:
-            center = parent.frameGeometry().center()
-            self.move(center - self.rect().center())
+        fit_within_screen(self, parent.frameGeometry().center() if parent is not None else None)
         self.raise_()
         self.activateWindow()
 
@@ -950,9 +967,7 @@ class ImportCommandsDialog(DragToMoveMixin, QDialog):
     def showEvent(self, event):
         super().showEvent(event)
         parent = self.parentWidget()
-        if parent is not None:
-            center = parent.frameGeometry().center()
-            self.move(center - self.rect().center())
+        fit_within_screen(self, parent.frameGeometry().center() if parent is not None else None)
         self.raise_()
         self.activateWindow()
 

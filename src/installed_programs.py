@@ -1,3 +1,4 @@
+import ctypes
 import os
 import sys
 from pathlib import Path
@@ -66,6 +67,123 @@ WINDOWS_SYSTEM_DIR_MARKERS = (
     "\\windows\\syswow64\\",
     "\\windows\\winsxs\\",
 )
+
+
+# Personal folders, looked up by KNOWNFOLDERID rather than assembled from
+# USERPROFILE - any of these can be redirected to OneDrive or another drive.
+SUGGESTED_FOLDERS = (
+    ("Downloads", "{374DE290-123F-4565-9164-39C4925E467B}", ["downloads", "dl"]),
+    ("Desktop", "{B4BFCC3A-DB2C-424C-B029-7FE99A87C641}", ["desktop"]),
+    ("Documents", "{FDD39AD0-238F-46AF-ADB4-6C85480369C7}", ["documents", "docs"]),
+    ("Pictures", "{33E28130-4E1E-4676-835A-98395C3BC3BB}", ["pictures", "photos"]),
+    ("Videos", "{18989B1D-99B5-455B-841C-AB7C74E4DDFC}", ["videos"]),
+    ("Music", "{4BD8D571-6D19-48D3-BE97-422220080E43}", ["music"]),
+)
+
+# Built-in tools worth launching by name. These live in System32, which the
+# registry scan deliberately skips, so they never turn up on their own.
+SUGGESTED_TOOLS = (
+    ("Remote Desktop", "mstsc.exe", ["rdp", "mstsc"], "Connect to another PC"),
+    ("Task Manager", "taskmgr.exe", ["taskmgr"], "View running apps and processes"),
+    ("Control Panel", "control.exe", ["control"], "Open the Windows Control Panel"),
+    ("File Explorer", "explorer.exe", ["explorer", "files"], "Browse your files"),
+    ("Command Prompt", "cmd.exe", ["cmd"], "Open a command prompt"),
+    ("PowerShell", "WindowsPowerShell\\v1.0\\powershell.exe", ["powershell", "pwsh"], "Open PowerShell"),
+    ("Snipping Tool", "SnippingTool.exe", ["snip", "screenshot"], "Capture part of the screen"),
+    ("Calculator", "calc.exe", ["calculator"], "Open the Windows calculator"),
+    ("Notepad", "notepad.exe", ["notepad"], "Open Notepad"),
+    ("Paint", "mspaint.exe", ["paint"], "Open Paint"),
+    ("Magnifier", "magnify.exe", ["magnifier", "zoom"], "Magnify part of the screen"),
+    ("On-Screen Keyboard", "osk.exe", ["osk", "keyboard"], "Show the on-screen keyboard"),
+    ("Character Map", "charmap.exe", ["charmap", "symbols"], "Look up special characters"),
+    ("Disk Cleanup", "cleanmgr.exe", ["cleanmgr", "diskcleanup"], "Free up disk space"),
+    ("Resource Monitor", "resmon.exe", ["resmon"], "Watch CPU, memory and disk use"),
+    ("System Information", "msinfo32.exe", ["sysinfo", "msinfo"], "View system specifications"),
+    ("Device Manager", "devmgmt.msc", ["devices", "devmgmt"], "Manage hardware and drivers"),
+    ("Registry Editor", "regedit.exe", ["regedit", "registry"], "Edit the Windows registry"),
+)
+
+
+def discover_windows_suggestions() -> list[dict]:
+    """Return commands for standard Windows folders and tools.
+
+    Neither source shows up in the normal scan: personal folders are not
+    programs, and the built-in tools sit in System32, which is filtered out as
+    system plumbing. They are the entries people most often add by hand.
+    """
+    if sys.platform != "win32":
+        return []
+
+    suggestions: list[dict] = []
+    seen: set[str] = set()
+
+    for name, folder_id, aliases in SUGGESTED_FOLDERS:
+        path = _known_folder_path(folder_id)
+        if path is None:
+            continue
+        key = _path_key(path)
+        if key in seen:
+            continue
+        seen.add(key)
+        suggestions.append(_suggestion(name, path, aliases, f"Opens your {name} folder"))
+
+    for name, relative, aliases, description in SUGGESTED_TOOLS:
+        path = _windows_tool_path(relative)
+        if path is None:
+            continue
+        key = _path_key(path)
+        if key in seen:
+            continue
+        seen.add(key)
+        suggestions.append(_suggestion(name, path, aliases, description))
+
+    return suggestions
+
+
+def _suggestion(name: str, path: Path, aliases: list[str], description: str) -> dict:
+    return {
+        "name": name,
+        # An alias matching the name is redundant and trips the duplicate check.
+        "aliases": [alias for alias in aliases if alias.casefold() != name.casefold()],
+        "location": str(path),
+        "description": description,
+        "type": "file",
+        "suggested": True,
+    }
+
+
+def _known_folder_path(folder_id: str) -> Path | None:
+    """Resolve a KNOWNFOLDERID to its current location on disk."""
+    try:
+        shell32 = ctypes.windll.shell32
+        ole32 = ctypes.windll.ole32
+        guid = ctypes.create_string_buffer(16)
+        if ole32.CLSIDFromString(ctypes.c_wchar_p(folder_id), guid) != 0:
+            return None
+        buffer = ctypes.c_wchar_p()
+        if shell32.SHGetKnownFolderPath(guid, 0, None, ctypes.byref(buffer)) != 0:
+            return None
+        try:
+            value = buffer.value
+        finally:
+            ole32.CoTaskMemFree(buffer)
+    except Exception:
+        return None
+
+    if not value:
+        return None
+    path = Path(value)
+    return path if path.is_dir() else None
+
+
+def _windows_tool_path(relative: str) -> Path | None:
+    """Locate a bundled Windows tool, skipping any that this edition lacks."""
+    windows_dir = Path(os.environ.get("SystemRoot", r"C:\Windows"))
+    for base in (windows_dir / "System32", windows_dir):
+        candidate = base / relative
+        if candidate.is_file():
+            return candidate
+    return None
 
 
 def _is_noise_candidate(name: str, target_path: Path, from_registry: bool) -> bool:
