@@ -298,11 +298,32 @@ class CommandActionEditor(QFrame):
 
         self._on_text_changed(self.command_action_edit_box.text())
 
+    def _browse_start(self) -> str:
+        """Where the file dialog should open: the current target if it exists,
+        otherwise its nearest existing ancestor, otherwise wherever Qt defaults.
+
+        For a file target the file path itself is returned so the dialog
+        opens in its folder with that file preselected.
+        """
+        text = self.command_action_edit_box.text().strip()
+        if not text:
+            return ""
+        path = Path(text).expanduser()
+        if path.exists():
+            if self._mode == CommandType.FOLDER and path.is_file():
+                return str(path.parent)
+            return str(path)
+        for ancestor in path.parents:
+            if ancestor.exists():
+                return str(ancestor)
+        return ""
+
     def clicked(self):
+        start = self._browse_start()
         if self._mode == CommandType.FOLDER:
-            path = QFileDialog.getExistingDirectory(self, "Select Folder")
+            path = QFileDialog.getExistingDirectory(self, "Select Folder", start)
         else:
-            path, _ = QFileDialog.getOpenFileName(self, "Select File")
+            path, _ = QFileDialog.getOpenFileName(self, "Select File", start)
         if path:
             self.command_action_edit_box.setText(path)
 
