@@ -65,9 +65,9 @@ matches. Turn it on under Settings.
     or start when you sign in.
 3. Press `Alt+F` to open Dash.
 
-The first time Dash starts with no commands it offers to auto-populate them
-from your installed programs and common Windows folders and tools. You can run
-the same scan again later from Settings.
+Until you have added a command, opening Dash shows a single row offering to
+scan your installed programs and common Windows folders and tools. Press Enter
+on it to run the scan, or run it again any time from Settings.
 
 Use the system tray menu to open settings or manage commands. Dash stores your
 configuration in `%APPDATA%\Dash`, so upgrades keep your settings and commands.

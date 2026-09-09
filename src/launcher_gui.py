@@ -33,11 +33,6 @@ LATEST_RELEASE_PAGE = "https://github.com/CalemYoung/Dash/releases/latest"
 TRAY_SETUP_RETRIES = 20
 TRAY_SETUP_RETRY_MS = 3000
 
-# Written beside commands.toml once the first-run auto-populate offer has been
-# shown, so declining it is respected on the next start.
-FIRST_RUN_MARKER_FILENAME = ".first_run_complete"
-FIRST_RUN_POPULATE_DELAY_MS = 800
-
 # Vertical padding of #ResultsList in style.qss; the list height is sized to
 # whole rows so the last visible row is never cut through its text.
 RESULTS_LIST_PADDING_V = 4
@@ -339,10 +334,6 @@ class MainWindow(QMainWindow):
         # notification, and never re-asked during the session.
         if self.settings.general.check_updates_on_startup:
             QTimer.singleShot(2500, self.check_for_updates)
-        # A fresh install has nothing to launch yet, so offer the installed
-        # program scan once instead of leaving an empty launcher.
-        if self._first_run_populate_pending():
-            QTimer.singleShot(FIRST_RUN_POPULATE_DELAY_MS, self._offer_first_run_populate)
 
     @staticmethod
     def _format_shortcut(shortcut):
@@ -579,6 +570,11 @@ class MainWindow(QMainWindow):
         todays_date = datetime.datetime.now()
         self.date_info_day_label.setText(todays_date.strftime("%A"))
         self.date_info_date_label.setText(todays_date.strftime("%d %B"))
+
+        # Opening on an empty box: normally nothing to show, but a launcher
+        # with no commands yet surfaces its offer to scan for programs here.
+        if not self.search_input_widget.text():
+            self._clear_and_hide_results()
 
         self.adjustSize()
         if self.settings.general.show_on_screen_with_mouse:
@@ -1081,7 +1077,10 @@ class MainWindow(QMainWindow):
             self.activate_row(row)
 
     def activate_row(self, row: "ResultRow"):
-        """Act on a results row: copy a calculator value, or run its command."""
+        """Act on a results row: run its action, copy a calculator value, or run its command."""
+        if row.action is not None:
+            row.action()
+            return
         if row.copy_value is not None:
             pyperclip.copy(row.copy_value)
             print(f"Result: {row.copy_value} (copied to clipboard)")
@@ -1119,25 +1118,6 @@ class MainWindow(QMainWindow):
         if not self.isVisible():
             self.activate_launcher()
         self.open_editor(None)
-
-    def _first_run_marker_path(self) -> Path:
-        return self.cmd_manager.command_file_path.parent / FIRST_RUN_MARKER_FILENAME
-
-    def _first_run_populate_pending(self) -> bool:
-        if self._first_run_marker_path().exists():
-            return False
-        return not self.cmd_manager.has_user_commands()
-
-    def _offer_first_run_populate(self):
-        # Mark before showing: the offer is made once whether it is accepted or not.
-        marker = self._first_run_marker_path()
-        try:
-            marker.parent.mkdir(parents=True, exist_ok=True)
-            marker.write_text("Dash offered to auto-populate commands on its first start.\n", encoding="utf-8")
-        except OSError:
-            pass
-        self.activate_launcher()
-        self.choose_recent_programs()
 
     def choose_recent_programs(self):
         if self._program_discovery_thread is not None:
@@ -1363,10 +1343,36 @@ class MainWindow(QMainWindow):
             super().keyPressEvent(event)
 
     def _clear_and_hide_results(self):
-        """Blank search box: show only the search bar, no results list."""
+        """Blank search box: show only the search bar, no results list.
+
+        The one exception is a launcher with no commands at all. Rather than
+        an empty box, it shows a single row offering to scan installed
+        programs, so the offer appears in context when the user opens Dash
+        instead of as an unprompted dialog at startup.
+        """
         self.results_list_widget.clear()
+        if not self.cmd_manager.has_user_commands():
+            self._show_empty_state()
+            return
         self.results_list_widget.hide()
         self._sync_search_view_size()
+
+    def _show_empty_state(self):
+        self.results_list_widget.show()
+        self._sync_search_view_size()
+        item = QListWidgetItem(self.results_list_widget)
+        new_command = self._format_shortcut(self.settings.shortcuts.new_command)
+        row = ResultRow(
+            self,
+            icon_path=self.settings.paths.program_icon,
+            command="Add your installed programs",
+            description=f"Nothing here yet. Press Enter to scan this PC, or {new_command} to add a command by hand.",
+            action=self.choose_recent_programs,
+        )
+        item.setSizeHint(row.sizeHint())
+        self.results_list_widget.setItemWidget(item, row)
+        self.results_list_widget.setCurrentRow(0)
+        self._snap_results_height()
 
     def show_results(self, results):
         self.results_list_widget.show()
@@ -1521,6 +1527,7 @@ class ResultRow(QWidget):
         command_name=None,
         editable=False,
         copy_value: str | None = None,
+        action=None,
     ):
         # Every widget in a row is created with its parent set. A parentless
         # QWidget is a top-level window, and Qt creates a native window for it
@@ -1534,6 +1541,8 @@ class ResultRow(QWidget):
         self.command_name = command if command_name is None else command_name
         # Set for calculator rows: activating the row copies this to the clipboard.
         self.copy_value = copy_value
+        # Set for informational rows that do something other than run a command.
+        self.action = action
 
         # Create the main horizontal layout
         row_layout = QHBoxLayout(self)
