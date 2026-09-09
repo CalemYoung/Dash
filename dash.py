@@ -41,7 +41,12 @@ def _log_fatal_error():
 
 
 try:
-    from src import CommandManager, MainWindow, HotkeyListener, Settings
+    # Import the submodules directly rather than through the package's lazy
+    # __getattr__: PyInstaller only bundles what it can see in static imports.
+    from src.command_manager import CommandManager
+    from src.launcher_gui import MainWindow
+    from src.launcher_hotkey import HotkeyListener
+    from src.settings import Settings
     from src.version import current_version
     from PyQt6.QtWidgets import QApplication
 except Exception:

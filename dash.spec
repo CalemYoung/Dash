@@ -2,6 +2,8 @@
 # Dash - PyInstaller Spec File
 # Calem Young
 
+from PyInstaller.utils.hooks import collect_submodules
+
 block_cipher = None
 
 a = Analysis(
@@ -15,7 +17,8 @@ a = Analysis(
         ('config/commands.default.toml', 'config'),
         ('build/installer/version.txt', 'build/installer'),
     ],
-    hiddenimports=['win32com.client'],
+    # src/__init__.py resolves its modules lazily, so list them explicitly.
+    hiddenimports=['win32com.client', 'pythoncom', *collect_submodules('src')],
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
