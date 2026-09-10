@@ -7,6 +7,7 @@ script generates the PyInstaller version resource from it and passes it to
 Inno Setup on the command line, so no committed file has to be rewritten.
 """
 
+import re
 import shutil
 import subprocess
 from pathlib import Path
@@ -50,6 +51,19 @@ def build_executable():
         return False
 
 
+def numeric_version(version: str) -> str:
+    """Four dotted integers for Windows version resources.
+
+    Those fields cannot carry a label, so "2.9.0-dev" contributes only its
+    digits here. The full string still reaches the installer's display
+    version and the app, so the label stays visible where it matters.
+    """
+    parts = re.findall(r"\d+", version.split("-", 1)[0].split("+", 1)[0])[:4]
+    while len(parts) < 4:
+        parts.append("0")
+    return ".".join(parts)
+
+
 def write_version_info(version):
     """Generate the Windows version resource PyInstaller embeds in Dash.exe.
 
@@ -57,11 +71,8 @@ def write_version_info(version):
     """
     print(f"Generating version resource for {version}...")
 
-    version_parts = version.split(".")
-    while len(version_parts) < 4:
-        version_parts.append("0")
-    version_tuple = ", ".join(version_parts[:4])
-    version_str = ".".join(version_parts[:4])
+    version_str = numeric_version(version)
+    version_tuple = ", ".join(version_str.split("."))
 
     version_info = f"""# UTF-8
 VSVersionInfo(
@@ -129,7 +140,12 @@ def build_installer(version):
 
     try:
         subprocess.run(
-            [inno_setup_path, f"/DMyAppVersion={version}", str(INSTALLER_SCRIPT)],
+            [
+                inno_setup_path,
+                f"/DMyAppVersion={version}",
+                f"/DMyAppNumericVersion={numeric_version(version)}",
+                str(INSTALLER_SCRIPT),
+            ],
             check=True,
             cwd=PROJECT_ROOT,
         )

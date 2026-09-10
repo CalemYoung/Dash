@@ -8,6 +8,11 @@
 #ifndef MyAppVersion
   #define MyAppVersion "0.0.0"
 #endif
+; Windows version resources need four plain integers; the build script
+; derives this from MyAppVersion so a label like "2.9.0-dev" still compiles.
+#ifndef MyAppNumericVersion
+  #define MyAppNumericVersion "0.0.0.0"
+#endif
 #define MyAppPublisher "Calem Young"
 #define MyAppURL "https://github.com/calemyoung/Dash"
 #define MyAppExeName "Dash.exe"
@@ -49,12 +54,12 @@ PrivilegesRequired=lowest
 PrivilegesRequiredOverridesAllowed=dialog
 
 ; Version info
-VersionInfoVersion={#MyAppVersion}
+VersionInfoVersion={#MyAppNumericVersion}
 VersionInfoCompany={#MyAppPublisher}
 VersionInfoDescription={#MyAppDescription}
 VersionInfoCopyright=Copyright (C) 2025 {#MyAppPublisher}
 VersionInfoProductName={#MyAppName}
-VersionInfoProductVersion={#MyAppVersion}
+VersionInfoProductVersion={#MyAppNumericVersion}
 
 ; Uninstall
 Uninstallable=yes
