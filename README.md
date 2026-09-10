@@ -3,7 +3,7 @@
 </h1>
 
 <p align="center">
-   <strong>A keyboard launcher for Windows that only knows the commands you gave it.</strong>
+   <strong>Dash is a keyboard launcher for Windows that only knows the commands you gave it.</strong>
 </p>
 
 <p align="center">

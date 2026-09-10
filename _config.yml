@@ -1,0 +1,22 @@
+# GitHub Pages site for Dash: the README rendered at calemyoung.github.io/Dash
+# so the project has an indexable page with a plain title and description.
+title: Dash launcher for Windows
+description: Dash is a fast keyboard launcher for Windows. Open apps, files, folders and websites from one search box. Only the commands you added, in the same order every time.
+url: https://calemyoung.github.io
+baseurl: /Dash
+theme: jekyll-theme-minimal
+logo: assets/icons/icon.png
+show_downloads: false
+exclude:
+  - .github
+  - .venv
+  - build
+  - config
+  - dist
+  - packaging
+  - src
+  - "*.py"
+  - "*.spec"
+  - "*.qss"
+  - requirements.txt
+  - README.md
