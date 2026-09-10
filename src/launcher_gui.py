@@ -1291,23 +1291,32 @@ class MainWindow(QMainWindow):
         self._editor_return_center = self.frameGeometry().center()
         panel = CommandEditorPanel(command, self.icon_manager, self.cmd_manager, self)
         panel.closed.connect(self.close_editor)
+        panel.layoutChanged.connect(self._fit_editor_panel)
         self._editor_panel = panel
         self.view_stack.addWidget(panel)
         self.view_stack.setCurrentWidget(panel)
-        # Pin the window size, but never below what the panel needs: the
-        # editor has grown fields over time, and a fixed height that is too
-        # short squeezes the alias box until its chips are clipped.
         self._pre_editor_size = self.size()
+        self._fit_editor_panel()
+        panel.command_name_edit_box.setFocus()
+
+    def _fit_editor_panel(self):
+        """Pin the window to the editor size, but never below what the panel
+        needs right now: switching to the URL type adds a row and alias chips
+        wrap onto new lines, and a fixed height that is too short squeezes
+        the fields until they are clipped."""
+        panel = self._editor_panel
+        if panel is None:
+            return
         width = self.settings.ui.program_width
-        needed_height = panel.layout().totalHeightForWidth(width) if panel.layout().hasHeightForWidth() else panel.sizeHint().height()
         editor_size = clamp_size_to_screen(
             width,
-            max(self.settings.ui.editor_height, needed_height),
+            max(self.settings.ui.editor_height, panel.needed_height(width)),
             available_geometry_for(self),
         )
+        if editor_size == self.size():
+            return
         self.setFixedSize(editor_size)
         move_within_screen(self, editor_size, self._editor_return_center)
-        panel.command_name_edit_box.setFocus()
 
     def close_editor(self):
         """Return to the search view after the editor saves in the background."""

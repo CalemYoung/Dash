@@ -312,10 +312,14 @@ class CommandActionEditor(QFrame):
     iconResolved = pyqtSignal(QIcon)
     browserChanged = pyqtSignal()
 
-    def __init__(self, url_icon_path):
+    # How long to keep looking for a favicon the background worker is fetching
+    FAVICON_WAIT_MS = 30_000
+
+    def __init__(self, url_icon_path, icon_manager=None):
         super().__init__()
         self._mode = CommandType.APP
         self._url_icon = QIcon(url_icon_path)
+        self._icon_manager = icon_manager
         self._network = QNetworkAccessManager(self)
         self._reply = None
         self._icon_provider = QFileIconProvider()
@@ -362,6 +366,14 @@ class CommandActionEditor(QFrame):
         self._check_timer.setSingleShot(True)
         self._check_timer.setInterval(500)
         self._check_timer.timeout.connect(self._verify_url)
+
+        # Favicons are fetched by the icon manager's background worker; poll
+        # the cache briefly so the icon fills in while the editor is open.
+        self._favicon_timer = QTimer(self)
+        self._favicon_timer.setInterval(500)
+        self._favicon_timer.timeout.connect(self._poll_favicon)
+        self._favicon_url = ""
+        self._favicon_waited_ms = 0
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -444,6 +456,7 @@ class CommandActionEditor(QFrame):
         text = text.strip()
         if self._mode != CommandType.URL:
             self._check_timer.stop()
+            self._favicon_timer.stop()
             self._resolve_file_icon(text)
             self._verify_path(text)
             return
@@ -452,12 +465,39 @@ class CommandActionEditor(QFrame):
         self.open_button.setEnabled(valid)
         if not valid:
             self._check_timer.stop()
+            self._favicon_timer.stop()
             self._set_status("idle", "Enter a full http(s) URL")
-            self.iconResolved.emit(self._url_icon)
+            self.iconResolved.emit(QIcon())
             return
         self._set_status("checking", "Checking...")
-        self.iconResolved.emit(self._url_icon)
+        self._resolve_favicon(text)
         self._check_timer.start()
+
+    def _resolve_favicon(self, url):
+        """Emit the site's favicon if it is cached; otherwise start the
+        download and keep checking until it lands or the wait runs out."""
+        self._favicon_timer.stop()
+        self._favicon_url = url
+        self._favicon_waited_ms = 0
+        if self._icon_manager is None:
+            self.iconResolved.emit(QIcon())
+            return
+        cached = self._icon_manager._check_favicon_cache(url)
+        if cached:
+            self.iconResolved.emit(QIcon(cached))
+            return
+        self.iconResolved.emit(QIcon())
+        self._icon_manager._queue_favicon_download(url)
+        self._favicon_timer.start()
+
+    def _poll_favicon(self):
+        self._favicon_waited_ms += self._favicon_timer.interval()
+        cached = self._icon_manager._check_favicon_cache(self._favicon_url)
+        if cached:
+            self._favicon_timer.stop()
+            self.iconResolved.emit(QIcon(cached))
+        elif self._favicon_waited_ms >= self.FAVICON_WAIT_MS:
+            self._favicon_timer.stop()
 
     def _verify_path(self, text):
         """Light the status dot for a file or folder target, checked right now."""
@@ -594,6 +634,15 @@ class CommandEditorPanel(QFrame):
     closed = pyqtSignal()
     # Standalone mode only: the edited command, validated but not stored.
     saved = pyqtSignal(dict)
+    # The panel needs a different height (type switched, alias rows changed).
+    layoutChanged = pyqtSignal()
+
+    def needed_height(self, width: int) -> int:
+        """Height that shows every visible field at `width` without squeezing."""
+        layout = self.layout()
+        if layout.hasHeightForWidth():
+            return layout.totalHeightForWidth(width)
+        return self.sizeHint().height()
 
     def __init__(self, command, icon_manager, cmd_manager, parent=None, *, standalone=False, title=None):
         super().__init__(parent)
@@ -724,8 +773,11 @@ class CommandEditorPanel(QFrame):
         layout.addSpacing(6)
         layout.addLayout(command_type_row)
 
-        self.command_action = CommandActionEditor(icon_manager.settings.paths.url_command_icon)
+        self.command_action = CommandActionEditor(icon_manager.settings.paths.url_command_icon, icon_manager)
         self.command_type_selector.typeChanged.connect(self.command_action.set_mode)
+        # The URL type adds a row and alias chips wrap onto new lines, so the
+        # window holding this panel must be able to re-fit its height.
+        self.command_type_selector.typeChanged.connect(lambda _type: self.layoutChanged.emit())
         self.command_action.iconResolved.connect(self._apply_command_icon)
         self.command_action.set_mode(self.command_type_selector.selection)
         layout.addWidget(self.command_action)
@@ -768,6 +820,7 @@ class CommandEditorPanel(QFrame):
         self.command_action.command_action_edit_box.textChanged.connect(self._update_dirty_state)
         self.command_action.browserChanged.connect(self._update_dirty_state)
         self.alias_box.aliasesChanged.connect(self._update_dirty_state)
+        self.alias_box.aliasesChanged.connect(self.layoutChanged)
         self._update_dirty_state()
 
         # Explicit tab order so focus follows the visual top-to-bottom flow.
@@ -815,7 +868,7 @@ class CommandEditorPanel(QFrame):
                 self._resolved_icon = QIcon(pixmap)
                 self._command_icon.setIcon(self._resolved_icon)
             self._icon_recipe = recipe
-        elif is_url:
+        elif is_url and self._resolved_icon.isNull():
             self._command_icon.setIcon(QIcon(self.icon_manager.settings.paths.url_command_icon))
 
     def _is_dirty(self) -> bool:
@@ -854,13 +907,22 @@ class CommandEditorPanel(QFrame):
             self.keyboard_hint.setVisible(dirty)
 
     def _apply_command_icon(self, icon):
-        # A null icon means the action editor had nothing to resolve
-        if not icon.isNull():
-            self._resolved_icon = icon
-            self._icon_path = None
-            self._icon_recipe = None  # the icon now comes from the target, not the studio
-        self._command_icon.setIcon(icon if not icon.isNull() else self._default_command_icon)
+        """The target's own icon, resolved by the action editor.
+
+        A null icon means there was nothing to resolve (yet): the type's
+        placeholder is shown, and nothing is saved so the command keeps
+        resolving its icon later, when a favicon may have arrived.
+        """
+        self._resolved_icon = icon
+        self._icon_path = None
+        self._icon_recipe = None  # the icon now comes from the target, not the studio
+        self._command_icon.setIcon(icon if not icon.isNull() else self._placeholder_icon())
         self._update_dirty_state()
+
+    def _placeholder_icon(self):
+        if self.command_type_selector.selection == CommandType.URL:
+            return QIcon(self.icon_manager.settings.paths.url_command_icon)
+        return self._default_command_icon
 
     def keyPressEvent(self, event):
         # Esc closes without saving, as the hint beneath the buttons says.

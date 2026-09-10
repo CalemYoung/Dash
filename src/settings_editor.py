@@ -313,17 +313,28 @@ class CommandEditDialog(DragToMoveMixin, QDialog):
         self.panel = CommandEditorPanel(command, icon_manager, command_manager, self, standalone=True, title=title)
         self.panel.saved.connect(self._on_saved)
         self.panel.closed.connect(self._on_closed)
+        self.panel.layoutChanged.connect(self._fit_panel)
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.addWidget(self.panel)
 
-        # Pinned (the alias chips flow to the width), but never shorter than
-        # the panel needs, so nothing gets clipped. The screen clamp in
-        # showEvent still shrinks it on a small display.
-        panel_layout = self.panel.layout()
-        needed = panel_layout.totalHeightForWidth(width) if panel_layout.hasHeightForWidth() else self.panel.sizeHint().height()
-        self.setFixedSize(width, max(settings.ui.editor_height, needed))
+        self._width = width
+        self._editor_height = settings.ui.editor_height
+        self._fit_panel()
+
+    def _fit_panel(self):
+        """Pinned (the alias chips flow to the width), but never shorter than
+        the panel needs right now, so nothing gets clipped when the URL type
+        adds a row or aliases wrap. The screen clamp still shrinks it on a
+        small display."""
+        height = max(self._editor_height, self.panel.needed_height(self._width))
+        if QSize(self._width, height) == self.size():
+            return
+        self.setFixedSize(self._width, height)
+        if self.isVisible():
+            parent = self.parentWidget()
+            fit_within_screen(self, parent.frameGeometry().center() if parent is not None else None)
 
     def showEvent(self, event):
         super().showEvent(event)
