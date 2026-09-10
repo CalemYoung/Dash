@@ -24,6 +24,7 @@ from PyQt6.QtWidgets import (
     QPushButton,
     QSpinBox,
     QScrollArea,
+    QSizePolicy,
     QVBoxLayout,
     QWidget,
 )
@@ -180,7 +181,7 @@ class ColorButton(QPushButton):
         color = QColor(str(value))
         self._color = color if color.isValid() else QColor(Qt.GlobalColor.white)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.setMinimumWidth(110)
+        self.setMinimumWidth(84)
         self.clicked.connect(self._choose_color)
         self._update_swatch()
 
@@ -248,7 +249,7 @@ from .browsers import DEFAULT_BROWSER, installed_browsers
 from .command_editor import CommandEditorPanel
 
 
-def browser_options(current: str | None, first_label: str = "Windows default browser") -> list[tuple[str, str]]:
+def browser_options(current: str | None, first_label: str = "Windows default") -> list[tuple[str, str]]:
     """(stored value, label) pairs: the default, then each installed browser.
 
     A stored browser that is no longer installed stays listed, marked, so the
@@ -362,16 +363,20 @@ class SettingsEditorPanel(QFrame):
         content_layout.setContentsMargins(8, 6, 8, 8)
         content_layout.setSpacing(18)
 
+        # Left: how Dash behaves. Right: how it looks. Each group is one topic.
         left_column = QVBoxLayout()
         left_column.setSpacing(10)
+        left_column.addWidget(self._general_group())
         left_column.addWidget(self._search_group())
+        left_column.addWidget(self._results_group())
         left_column.addWidget(self._shortcuts_group())
-        left_column.addWidget(self._commands_group())
         left_column.addStretch(1)
 
         right_column = QVBoxLayout()
         right_column.setSpacing(10)
-        right_column.addWidget(self._ui_group())
+        right_column.addWidget(self._layout_group())
+        right_column.addWidget(self._text_group())
+        right_column.addWidget(self._commands_group())
         right_column.addStretch(1)
 
         content_layout.addLayout(left_column, 1)
@@ -421,18 +426,48 @@ class SettingsEditorPanel(QFrame):
         self._connect_signals()
         self._update_dirty_state()
 
-    def _group(self, title, fields):
+    def _group(self, title, rows):
+        """A titled box of label/field rows.
+
+        Each row is (label, key, control) or (label, [(key, control), ...]) for
+        several controls side by side. Fields all stretch to the same right
+        edge and never wrap under their label, so rows line up whatever mix
+        of spin boxes, drop-downs and colour buttons a group holds.
+        """
         group = QGroupBox(title)
         form = QFormLayout(group)
-        form.setContentsMargins(14, 14, 14, 10)
+        form.setContentsMargins(14, 14, 14, 12)
         form.setHorizontalSpacing(16)
-        form.setVerticalSpacing(6)
-        form.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.AllNonFixedFieldsGrow)
-        form.setRowWrapPolicy(QFormLayout.RowWrapPolicy.WrapLongRows)
-        for label, key, control in fields:
-            self._controls[key] = control
-            form.addRow(label, control)
+        form.setVerticalSpacing(8)
+        form.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.ExpandingFieldsGrow)
+        form.setRowWrapPolicy(QFormLayout.RowWrapPolicy.DontWrapRows)
+        form.setLabelAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+        for row in rows:
+            if len(row) == 3:
+                label, key, control = row
+                self._controls[key] = control
+                form.addRow(label, self._stretchy(control))
+            else:
+                label, pairs = row
+                holder = QWidget()
+                strip = QHBoxLayout(holder)
+                strip.setContentsMargins(0, 0, 0, 0)
+                strip.setSpacing(8)
+                for key, control in pairs:
+                    self._controls[key] = control
+                    strip.addWidget(self._stretchy(control), 1)
+                form.addRow(label, holder)
         return group
+
+    @staticmethod
+    def _stretchy(control):
+        """Let a field take the full field column; checkboxes stay their own size."""
+        if isinstance(control, QComboBox):
+            control.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon)
+            control.setMinimumContentsLength(10)
+        if not isinstance(control, QCheckBox):
+            control.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        return control
 
     @staticmethod
     def _line_edit(value):
@@ -470,7 +505,7 @@ class SettingsEditorPanel(QFrame):
         now it is still listed, marked as such, so the choice survives a
         laptop being undocked.
         """
-        options = [("mouse", "The display the mouse is on"), ("primary", "Primary display")]
+        options = [("mouse", "Where the mouse is"), ("primary", "Primary display")]
         app = QApplication.instance()
         screens = list(app.screens()) if app is not None else []
         primary = app.primaryScreen() if app is not None else None
@@ -497,111 +532,90 @@ class SettingsEditorPanel(QFrame):
         control.setCurrentIndex(index if index >= 0 else 0)
         return control
 
-    def _ui_group(self):
-        opacity = NoScrollDoubleSpinBox()
-        opacity.setRange(0.30, 1.00)
-        opacity.setSingleStep(0.05)
-        opacity.setDecimals(2)
-        opacity.setValue(self._settings.ui.window_opacity)
+    def _general_group(self):
+        general = self._settings.general
         return self._group(
-            "Launcher Appearance",
+            "General",
             [
-                ("Program width", "ui.program_width", self._spin(self._settings.ui.program_width, 280, 2000)),
-                ("Search height", "ui.search_height", self._spin(self._settings.ui.search_height, 50, 400)),
-                ("Results height", "ui.results_height", self._spin(self._settings.ui.results_height, 80, 1000)),
-                ("Editor height", "ui.editor_height", self._spin(self._settings.ui.editor_height, 400, 1400)),
-                ("Window opacity", "ui.window_opacity", opacity),
-                ("Search font size", "ui.search_font_size", self._spin(self._settings.ui.search_font_size, 8, 48)),
-                ("Search text color", "ui.search_text_color", self._color(self._settings.ui.search_text_color)),
-                ("Result font size", "ui.result_font_size", self._spin(self._settings.ui.result_font_size, 8, 32)),
-                ("Result text color", "ui.result_text_color", self._color(self._settings.ui.result_text_color)),
-                (
-                    "Description font size",
-                    "ui.description_font_size",
-                    self._spin(self._settings.ui.description_font_size, 7, 24),
-                ),
-                (
-                    "Description text color",
-                    "ui.description_text_color",
-                    self._color(self._settings.ui.description_text_color),
-                ),
-                ("Clock font size", "ui.clock_font_size", self._spin(self._settings.ui.clock_font_size, 6, 18)),
-                ("Clock day color", "ui.clock_day_text_color", self._color(self._settings.ui.clock_day_text_color)),
-                ("Clock date color", "ui.clock_date_text_color", self._color(self._settings.ui.clock_date_text_color)),
+                ("Open Dash with", "general.hotkey", self._hotkey_edit(general.hotkey)),
+                ("Open on display", "general.launcher_screen", self._choice(general.launcher_screen, self._screen_options())),
+                ("Websites open in", "general.browser", self._choice(general.browser, browser_options(general.browser))),
+                ("Check updates at startup", "general.check_updates_on_startup", self._check(general.check_updates_on_startup)),
             ],
         )
 
     def _search_group(self):
+        search = self._settings.search
         return self._group(
             "Search",
             [
-                (
-                    "Maximum results",
-                    "search.max_results",
-                    self._spin(self._settings.search.max_results, 1, 2_147_483_647),
-                ),
-                (
-                    "Open on display",
-                    "general.launcher_screen",
-                    self._choice(self._settings.general.launcher_screen, self._screen_options()),
-                ),
-                (
-                    "Open websites with",
-                    "general.browser",
-                    self._choice(self._settings.general.browser, browser_options(self._settings.general.browser)),
-                ),
-                (
-                    "Check for updates at startup",
-                    "general.check_updates_on_startup",
-                    self._check(self._settings.general.check_updates_on_startup),
-                ),
-                ("Autocomplete", "search.autocomplete", self._check(self._settings.search.autocomplete)),
-                ("Ignore capitalisation", "search.ignore_case", self._check(self._settings.search.ignore_case)),
+                ("Autocomplete", "search.autocomplete", self._check(search.autocomplete)),
+                ("Ignore capitalisation", "search.ignore_case", self._check(search.ignore_case)),
                 (
                     "Sort results by",
                     "search.sort_results",
-                    self._choice(
-                        self._settings.search.sort_results,
-                        [("popularity", "Most used first"), ("name", "Name (A to Z)")],
-                    ),
+                    self._choice(search.sort_results, [("popularity", "Most used first"), ("name", "Name (A to Z)")]),
                 ),
-                (
-                    "Show descriptions",
-                    "search.show_descriptions",
-                    self._check(self._settings.search.show_descriptions),
-                ),
-                (
-                    "Show run count on results",
-                    "search.show_run_counter",
-                    self._check(self._settings.search.show_run_counter),
-                ),
-                (
-                    "Show edit button on results",
-                    "search.show_edit_button",
-                    self._check(self._settings.search.show_edit_button),
-                ),
-                (
-                    "Show command tree",
-                    "search.show_command_tree",
-                    self._check(self._settings.search.show_command_tree),
-                ),
+                ("Maximum results", "search.max_results", self._spin(search.max_results, 1, 200)),
+            ],
+        )
+
+    def _results_group(self):
+        search = self._settings.search
+        return self._group(
+            "Results",
+            [
+                ("Descriptions", "search.show_descriptions", self._check(search.show_descriptions)),
+                ("Run counts", "search.show_run_counter", self._check(search.show_run_counter)),
+                ("Edit buttons", "search.show_edit_button", self._check(search.show_edit_button)),
+                ("Command tree panel", "search.show_command_tree", self._check(search.show_command_tree)),
             ],
         )
 
     def _shortcuts_group(self):
+        shortcuts = self._settings.shortcuts
         return self._group(
             "Shortcuts",
             [
-                ("Launcher hotkey", "general.hotkey", self._hotkey_edit(self._settings.general.hotkey)),
+                ("Edit selected command", "shortcuts.edit_selected_command", self._hotkey_edit(shortcuts.edit_selected_command)),
+                ("New command", "shortcuts.new_command", self._hotkey_edit(shortcuts.new_command)),
+            ],
+        )
+
+    def _layout_group(self):
+        ui = self._settings.ui
+        opacity = NoScrollDoubleSpinBox()
+        opacity.setRange(0.30, 1.00)
+        opacity.setSingleStep(0.05)
+        opacity.setDecimals(2)
+        opacity.setValue(ui.window_opacity)
+        return self._group(
+            "Layout",
+            [
+                ("Width", "ui.program_width", self._spin(ui.program_width, 280, 2000)),
+                ("Search box height", "ui.search_height", self._spin(ui.search_height, 50, 400)),
+                ("Results height", "ui.results_height", self._spin(ui.results_height, 80, 1000)),
+                ("Editor height", "ui.editor_height", self._spin(ui.editor_height, 400, 1400)),
+                ("Opacity", "ui.window_opacity", opacity),
+            ],
+        )
+
+    def _text_group(self):
+        """One row per piece of text: its size, then its colour(s)."""
+        ui = self._settings.ui
+        return self._group(
+            "Text",
+            [
+                ("Search box", [("ui.search_font_size", self._spin(ui.search_font_size, 8, 48)), ("ui.search_text_color", self._color(ui.search_text_color))]),
+                ("Result names", [("ui.result_font_size", self._spin(ui.result_font_size, 8, 32)), ("ui.result_text_color", self._color(ui.result_text_color))]),
+                ("Descriptions", [("ui.description_font_size", self._spin(ui.description_font_size, 7, 24)), ("ui.description_text_color", self._color(ui.description_text_color))]),
+                ("Clock size", "ui.clock_font_size", self._spin(ui.clock_font_size, 6, 18)),
                 (
-                    "Edit selected command",
-                    "shortcuts.edit_selected_command",
-                    self._hotkey_edit(self._settings.shortcuts.edit_selected_command),
-                ),
-                (
-                    "New command",
-                    "shortcuts.new_command",
-                    self._hotkey_edit(self._settings.shortcuts.new_command),
+                    "Clock day, date",
+                    [
+                        ("ui.clock_day_text_color", self._color(ui.clock_day_text_color)),
+                        ("ui.clock_date_text_color", self._color(ui.clock_date_text_color)),
+                    ],
                 ),
             ],
         )

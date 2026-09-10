@@ -955,8 +955,10 @@ class MainWindow(QMainWindow):
         self.view_stack.addWidget(panel)
         self.view_stack.setCurrentWidget(panel)
         self._pre_editor_size = self.size()
+        # Two columns of label/field rows need the width; the screen clamp
+        # still shrinks it on a small laptop.
         editor_size = clamp_size_to_screen(
-            max(760, self.settings.ui.program_width),
+            max(880, self.settings.ui.program_width),
             max(720, self.settings.ui.editor_height),
             available_geometry_for(self),
         )
