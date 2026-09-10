@@ -1093,13 +1093,35 @@ class MainWindow(QMainWindow):
             self.hide_launcher()
             return
 
-        self.cmd_manager.execute_command(self, row.command_name)
+        error = self.cmd_manager.execute_command(self, row.command_name)
+        if error:
+            self._show_launch_failure(cmd, error)
+            return
 
         # Opening settings swaps in an in-window panel; hiding the launcher
         # right after would hide that panel too, so leave the window shown.
         opens_panel = cmd.get("type") == "system" and cmd.get("action") == "open_settings"
         if not opens_panel:
             self.hide_launcher()
+
+    def _show_launch_failure(self, cmd: dict, reason: str):
+        """A command could not be launched: say why and offer to fix it.
+
+        The launcher stays open so the user is not left staring at the
+        desktop wondering what happened.
+        """
+        message_box = QMessageBox(self)
+        message_box.setWindowTitle("Dash")
+        message_box.setIcon(QMessageBox.Icon.Warning)
+        message_box.setText(f"Dash couldn't open {cmd.get('name', 'this command')}.")
+        message_box.setInformativeText(f"{reason}\n\nThe target may have been moved, renamed or uninstalled.")
+        edit_button = None
+        if cmd.get("type") != "system":
+            edit_button = message_box.addButton("Edit Command", QMessageBox.ButtonRole.AcceptRole)
+        message_box.addButton(QMessageBox.StandardButton.Close)
+        message_box.exec()
+        if edit_button is not None and message_box.clickedButton() is edit_button:
+            self.open_editor(cmd)
 
     def open_selected_command_editor(self):
         if hasattr(self, "view_stack") and self.view_stack.currentWidget() is not self.central_widget:

@@ -665,11 +665,15 @@ class CommandManager:
 
     # -------------------------------------------------------------- execution
 
-    def execute_command(self, main_window: "MainWindow", name: str):
-        """Run the command called `name`, if there is one."""
+    def execute_command(self, main_window: "MainWindow", name: str) -> str | None:
+        """Run the command called `name`, if there is one.
+
+        Returns None on success, or a plain-language reason the launch
+        failed so the caller can show it and offer a way to fix the command.
+        """
         cmd = self.commands.get(name)
         if cmd is None:
-            return
+            return None
 
         try:
             cmd_type = cmd["type"]
@@ -683,9 +687,14 @@ class CommandManager:
                 self._open_file(cmd.get("_path") or cmd["location"])
             print(f"Executing: {cmd['description']}")
             self.increment_run_count(cmd["name"])
-
-        except Exception as e:
-            main_window.display_error_popup(f"Error: {e}")
+            return None
+        except FileNotFoundError as error:
+            return str(error)
+        except OSError as error:
+            # os.startfile: no app associated, access denied, and the like.
+            return f"Windows could not open it: {error.strerror or error}"
+        except Exception as error:  # pragma: no cover - last resort
+            return f"Unexpected error: {error}"
 
     def _execute_system_command(self, main_window: "MainWindow", action: str):
         """Execute a built-in system command"""
@@ -697,11 +706,12 @@ class CommandManager:
         path = Path(file_path) if isinstance(file_path, str) else file_path
 
         if not path.exists():
-            raise FileNotFoundError(f"Path does not exist: {path}")
+            raise FileNotFoundError(f"The target no longer exists:\n{path}")
         os.startfile(path)
 
     def _open_url(self, url: str):
         """Open a URL in the default browser"""
         if not url.startswith(("http://", "https://")):
             url = "https://" + url
-        webbrowser.open(url)
+        if not webbrowser.open(url):
+            raise OSError(f"No web browser could be opened for {url}")

@@ -283,7 +283,9 @@ class CommandActionEditor(QFrame):
         self._mode = command_type
         is_url = command_type == CommandType.URL
         self.browse_button.setVisible(not is_url)
-        self.status_dot.setVisible(is_url)
+        # The status light applies to every type: reachability for URLs,
+        # existence (and the right kind of thing) for files and folders.
+        self.status_dot.setVisible(True)
         self.open_button.setVisible(is_url)
 
         if command_type == CommandType.APP:
@@ -330,7 +332,9 @@ class CommandActionEditor(QFrame):
     def _on_text_changed(self, text):
         text = text.strip()
         if self._mode != CommandType.URL:
+            self._check_timer.stop()
             self._resolve_file_icon(text)
+            self._verify_path(text)
             return
         url = QUrl.fromUserInput(text) if text else QUrl()
         valid = bool(text) and url.isValid() and url.scheme() in ("http", "https")
@@ -343,6 +347,27 @@ class CommandActionEditor(QFrame):
         self._set_status("checking", "Checking...")
         self.iconResolved.emit(self._url_icon)
         self._check_timer.start()
+
+    def _verify_path(self, text):
+        """Light the status dot for a file or folder target, checked right now."""
+        if not text:
+            self._set_status("idle", "Enter a folder" if self._mode == CommandType.FOLDER else "Enter a file or application")
+            return
+        path = Path(text).expanduser()
+        if self._mode == CommandType.FOLDER:
+            if path.is_dir():
+                self._set_status("ok", "Folder found")
+            elif path.is_file():
+                self._set_status("bad", "This is a file. Switch the type to App to launch it.")
+            else:
+                self._set_status("bad", "Folder not found")
+        else:
+            if path.is_file():
+                self._set_status("ok", "File found")
+            elif path.is_dir():
+                self._set_status("bad", "This is a folder. Switch the type to Folder to open it.")
+            else:
+                self._set_status("bad", "File not found")
 
     def _resolve_file_icon(self, path):
         """Use the OS icon for the app/file/folder, or fall back to the default."""
