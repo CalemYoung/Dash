@@ -5,8 +5,9 @@ import win32ui
 import win32con
 import win32api
 from pathlib import Path
-from threading import Thread
+from threading import Lock, Thread
 from queue import Queue
+import time
 import hashlib
 import re
 
@@ -67,13 +68,25 @@ def _favicon_hosts(netloc):
 
 
 class IconManager:
+    FAVICON_WORKERS = 6
+    FAVICON_TIMEOUT = 4  # seconds per request
+    FAVICON_GOOD_SIZE = 64  # stop looking once an icon this large is found
+    FAVICON_MIN_SIZE = 32  # smaller than this and the placeholder looks better
+    FAVICON_RETRY_AFTER = 15 * 60  # seconds before a failed site is tried again
+
     def __init__(self, settings):
         self.settings = settings
         self.icon_store_dir = get_user_icon_dir()
         self.bundled_icons = self._load_bundled_icons()
 
-        # Background icon download queue
+        # Background favicon downloads: a few workers so one slow or
+        # unreachable site does not hold up every other icon, and a record of
+        # what is in flight or recently failed so result rows re-rendering on
+        # every keystroke do not queue the same site again and again.
         self.download_queue = Queue()
+        self._favicon_lock = Lock()
+        self._favicon_pending: set[str] = set()
+        self._favicon_attempted: dict[str, float] = {}
         self._start_download_worker()
 
     def get_icon_path(self, command_config):
@@ -507,11 +520,12 @@ class IconManager:
 
         return bundled_icons
 
-    def _download_icon(self, url, min_size=0):
-        """Download and cache an icon from a URL.
+    def _download_icon(self, url):
+        """Download an icon and cache it as PNG.
 
-        Multi-resolution .ico files keep their largest frame. Results smaller
-        than `min_size` are rejected so the caller can try a better source.
+        Returns ``(path, size)`` where size is the longer side in pixels, or
+        ``None`` when the URL yields nothing usable. Multi-resolution .ico
+        files keep their largest frame. An existing cache file is reused.
         """
         try:
             from urllib.request import urlopen
@@ -523,29 +537,20 @@ class IconManager:
             cache_path = self.icon_store_dir / f"auto_web_{url_hash}.png"
 
             if cache_path.exists():
-                if min_size:
-                    cached = QImage(str(cache_path))
-                    if cached.isNull() or max(cached.width(), cached.height()) < min_size:
-                        return None
-                return str(cache_path)
+                cached = QImage(str(cache_path))
+                if cached.isNull():
+                    return None
+                return str(cache_path), max(cached.width(), cached.height())
 
-            # Download icon
-            with urlopen(url, timeout=5) as response:
+            with urlopen(url, timeout=self.FAVICON_TIMEOUT) as response:
                 image_data = response.read()
 
             image = self._largest_frame(image_data)
-            if image is None:
+            if image is None or not image.save(str(cache_path), "PNG"):
                 return None
-
-            if min_size and max(image.width(), image.height()) < min_size:
-                return None
-
-            if not image.save(str(cache_path), "PNG"):
-                return None
-
-            return str(cache_path)
-        except (URLError, HTTPError):
-            # Silent fail - 404s and 403s are expected for many sites
+            return str(cache_path), max(image.width(), image.height())
+        except (URLError, HTTPError, OSError):
+            # Silent fail - 404s, 403s and timeouts are expected for many sites
             return None
         except Exception as e:
             # Only print unexpected errors
@@ -599,39 +604,58 @@ class IconManager:
         return sources
 
     def _get_favicon_for_url(self, url):
-        """Get favicon for a website URL automatically"""
-        sources = self._favicon_sources(url)
+        """Fetch the best favicon for a site, one pass over the sources.
 
-        # First pass demands a usable resolution; second accepts anything
-        for min_size in (64, 0):
-            for favicon_url in sources:
-                result = self._download_icon(favicon_url, min_size=min_size)
-                if result:
-                    return result
-
+        Stops at the first icon of a good size; otherwise keeps the largest
+        seen, as long as it is not too small to be worth showing.
+        """
+        best = None
+        for favicon_url in self._favicon_sources(url):
+            result = self._download_icon(favicon_url)
+            if result is None:
+                continue
+            if result[1] >= self.FAVICON_GOOD_SIZE:
+                return result[0]
+            if best is None or result[1] > best[1]:
+                best = result
+        if best is not None and best[1] >= self.FAVICON_MIN_SIZE:
+            return best[0]
         return None
 
     def _check_favicon_cache(self, url):
-        """Check if favicon is already cached"""
+        """The largest cached favicon for the site, or None."""
         from PyQt6.QtGui import QImage
 
+        best = None
         for favicon_url in self._favicon_sources(url):
             url_hash = hashlib.md5(favicon_url.encode()).hexdigest()[:16]
             cache_path = self.icon_store_dir / f"auto_web_{url_hash}.png"
             if not cache_path.exists():
                 continue
             cached = QImage(str(cache_path))
-            if not cached.isNull() and max(cached.width(), cached.height()) >= 64:
+            if cached.isNull():
+                continue
+            size = max(cached.width(), cached.height())
+            if size >= self.FAVICON_GOOD_SIZE:
                 return str(cache_path)
-
-        return None
+            if size >= self.FAVICON_MIN_SIZE and (best is None or size > best[1]):
+                best = (str(cache_path), size)
+        return best[0] if best else None
 
     def _queue_favicon_download(self, url):
-        """Queue a favicon for background download"""
+        """Queue a favicon for background download, unless it is already in
+        flight or was tried recently and found nothing."""
+        with self._favicon_lock:
+            if url in self._favicon_pending:
+                return
+            attempted = self._favicon_attempted.get(url)
+            if attempted is not None and time.monotonic() - attempted < self.FAVICON_RETRY_AFTER:
+                return
+            self._favicon_pending.add(url)
         self.download_queue.put(url)
 
     def _start_download_worker(self):
-        """Start background thread for downloading favicons"""
+        """Start the background threads that download favicons."""
 
         def worker():
             while True:
@@ -642,7 +666,11 @@ class IconManager:
                     self._get_favicon_for_url(url)
                 except Exception:
                     pass  # Silent fail
+                finally:
+                    with self._favicon_lock:
+                        self._favicon_pending.discard(url)
+                        self._favicon_attempted[url] = time.monotonic()
                 self.download_queue.task_done()
 
-        thread = Thread(target=worker, daemon=True)
-        thread.start()
+        for _ in range(self.FAVICON_WORKERS):
+            Thread(target=worker, daemon=True).start()
