@@ -244,7 +244,22 @@ from .settings import (
 from .installed_programs import filter_new_program_commands
 from .window_placement import fit_within_screen
 from .icon_browser import FRAMELESS_DIALOG, RECIPE_KEYS, DragToMoveMixin
+from .browsers import DEFAULT_BROWSER, installed_browsers
 from .command_editor import CommandEditorPanel
+
+
+def browser_options(current: str | None, first_label: str = "Windows default browser") -> list[tuple[str, str]]:
+    """(stored value, label) pairs: the default, then each installed browser.
+
+    A stored browser that is no longer installed stays listed, marked, so the
+    choice is not silently lost when the machine changes.
+    """
+    options = [(DEFAULT_BROWSER, first_label)]
+    options += [(browser.key, browser.name) for browser in installed_browsers()]
+    current = str(current or "")
+    if current and current not in {stored for stored, _ in options}:
+        options.append((current, f"{current} (not installed)"))
+    return options
 
 
 def apply_edited_candidate(candidate: dict, edited: dict) -> None:
@@ -264,6 +279,9 @@ def apply_edited_candidate(candidate: dict, edited: dict) -> None:
             "type": edited.get("type", "file"),
         }
     )
+    candidate.pop("browser", None)
+    if edited.get("browser"):
+        candidate["browser"] = edited["browser"]
     new_recipe = {key: edited[key] for key in RECIPE_KEYS if edited.get(key)}
     if new_recipe or edited.get("icon"):
         for key in (*RECIPE_KEYS, "icon_source_data"):
@@ -528,6 +546,11 @@ class SettingsEditorPanel(QFrame):
                     self._choice(self._settings.general.launcher_screen, self._screen_options()),
                 ),
                 (
+                    "Open websites with",
+                    "general.browser",
+                    self._choice(self._settings.general.browser, browser_options(self._settings.general.browser)),
+                ),
+                (
                     "Check for updates at startup",
                     "general.check_updates_on_startup",
                     self._check(self._settings.general.check_updates_on_startup),
@@ -629,6 +652,7 @@ class SettingsEditorPanel(QFrame):
             general=GeneralSettings(
                 hotkey=self._value("general.hotkey"),
                 launcher_screen=str(self._value("general.launcher_screen") or "mouse"),
+                browser=str(self._value("general.browser") or DEFAULT_BROWSER),
                 check_updates_on_startup=bool(self._value("general.check_updates_on_startup")),
             ),
             ui=UISettings(

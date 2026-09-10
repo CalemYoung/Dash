@@ -4,6 +4,7 @@ from enum import IntEnum
 from pathlib import Path
 
 from PyQt6.QtWidgets import (
+    QComboBox,
     QFileDialog,
     QFrame,
     QLineEdit,
@@ -18,6 +19,7 @@ from PyQt6.QtCore import Qt, QSize, QUrl, QTimer, QFileInfo, pyqtSignal
 from PyQt6.QtGui import QIcon, QColor, QPixmap, QDesktopServices
 from PyQt6.QtNetwork import QNetworkAccessManager, QNetworkRequest, QNetworkReply
 
+from src.browsers import DEFAULT_BROWSER, installed_browsers
 from src.icon_browser import IconStudio, glyph_pixmap, OutlineIcon, recipe_from_command, recipe_to_fields, render_recipe
 
 
@@ -229,6 +231,7 @@ class CommandActionEditor(QFrame):
 
     # Resolved target icon; a null QIcon means "fall back to the default"
     iconResolved = pyqtSignal(QIcon)
+    browserChanged = pyqtSignal()
 
     def __init__(self, url_icon_path):
         super().__init__()
@@ -265,6 +268,16 @@ class CommandActionEditor(QFrame):
         row.addWidget(self.browse_button)
         row.addWidget(self.open_button)
 
+        # URL mode: which browser opens it. Empty means "use the setting".
+        self.browser_label = QLabel("Open with")
+        self.browser_label.setObjectName("fieldLabel")
+        self.browser_combo = QComboBox()
+        self.browser_combo.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+        self.browser_combo.addItem("Browser from Settings", "")
+        for browser in installed_browsers():
+            self.browser_combo.addItem(browser.name, browser.key)
+        self.browser_combo.currentIndexChanged.connect(lambda _index: self.browserChanged.emit())
+
         # Debounce reachability checks while the user is still typing
         self._check_timer = QTimer(self)
         self._check_timer.setSingleShot(True)
@@ -276,8 +289,25 @@ class CommandActionEditor(QFrame):
         layout.setSpacing(2)
         layout.addWidget(self.label)
         layout.addLayout(row)
+        layout.addSpacing(6)
+        layout.addWidget(self.browser_label)
+        layout.addWidget(self.browser_combo)
 
         self.set_mode(CommandType.APP)
+
+    def browser(self) -> str | None:
+        """Chosen browser key for this command, or None to use the setting."""
+        value = self.browser_combo.currentData()
+        return str(value) if value else None
+
+    def set_browser(self, key: str | None):
+        key = str(key or "")
+        index = self.browser_combo.findData(key)
+        if index < 0 and key:
+            # Keep a browser that is not installed on this machine rather than dropping it.
+            self.browser_combo.addItem(f"{key} (not installed)", key)
+            index = self.browser_combo.count() - 1
+        self.browser_combo.setCurrentIndex(max(0, index))
 
     def set_mode(self, command_type: CommandType):
         self._mode = command_type
@@ -287,6 +317,8 @@ class CommandActionEditor(QFrame):
         # existence (and the right kind of thing) for files and folders.
         self.status_dot.setVisible(True)
         self.open_button.setVisible(is_url)
+        self.browser_label.setVisible(is_url)
+        self.browser_combo.setVisible(is_url)
 
         if command_type == CommandType.APP:
             self.label.setText("Select app that will launch")
@@ -508,6 +540,7 @@ class CommandEditorPanel(QFrame):
         self._initial_location = self._command.get("location", "") if command else ""
         self._initial_aliases = sorted(self._command.get("aliases", [])) if command else []
         self._initial_icon = self._command.get("icon") if command else None
+        self._initial_browser = (self._command.get("browser") or None) if command else None
 
         title = QLabel(title or ("Edit Command" if command else "New Command"))
         title.setObjectName("CommandEditTitle")
@@ -637,6 +670,7 @@ class CommandEditorPanel(QFrame):
         self.command_description_edit_box.textChanged.connect(self._update_dirty_state)
         self.command_type_selector.typeChanged.connect(self._update_dirty_state)
         self.command_action.command_action_edit_box.textChanged.connect(self._update_dirty_state)
+        self.command_action.browserChanged.connect(self._update_dirty_state)
         self.alias_box.aliasesChanged.connect(self._update_dirty_state)
         self._update_dirty_state()
 
@@ -664,6 +698,7 @@ class CommandEditorPanel(QFrame):
         self.command_name_edit_box.setText(command.get("name", ""))
         self.command_description_edit_box.setText(command.get("description", ""))
         self.command_action.command_action_edit_box.setText(command.get("location", ""))
+        self.command_action.set_browser(command.get("browser"))
         self.alias_box.set_aliases(command.get("aliases", []))
         # Setting the location above resolved the target's own icon, which
         # clears the stored icon path and recipe; put the stored ones back.
@@ -710,6 +745,7 @@ class CommandEditorPanel(QFrame):
             or current_aliases != self._initial_aliases
             or current_icon != self._initial_icon
             or self._icon_recipe != self._initial_recipe
+            or self.command_action.browser() != self._initial_browser
         )
 
     def _update_dirty_state(self):
@@ -758,6 +794,7 @@ class CommandEditorPanel(QFrame):
             "icon": self._icon_path,
             "type": command_type.to_stored_type(),
             "command_type": command_type.name.lower(),
+            "browser": self.command_action.browser() if command_type == CommandType.URL else None,
             **recipe_to_fields(self._icon_recipe),
         }
 

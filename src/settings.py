@@ -50,6 +50,7 @@ def _from_section(cls, data: dict):
 class GeneralSettings:
     hotkey: str = DEFAULT_SETTINGS["general"]["hotkey"]
     launcher_screen: str = DEFAULT_SETTINGS["general"]["launcher_screen"]
+    browser: str = DEFAULT_SETTINGS["general"]["browser"]
     check_updates_on_startup: bool = DEFAULT_SETTINGS["general"]["check_updates_on_startup"]
 
 

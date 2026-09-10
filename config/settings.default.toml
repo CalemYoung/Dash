@@ -4,6 +4,9 @@ hotkey = "Alt+F"
 # "primary", or a display's name as listed in Settings. It is always centred
 # on that display, so it never gets left behind on the screen it last used.
 launcher_screen = "mouse"
+# Browser for website commands: "default" for the Windows default, or a
+# browser chosen from the list in Settings. A command can override this.
+browser = "default"
 # Look for a new release once each time Dash starts and show a single tray
 # notification if there is one. Nothing is installed until you choose to.
 check_updates_on_startup = true

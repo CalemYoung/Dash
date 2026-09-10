@@ -2,11 +2,11 @@ import base64
 import json
 import os
 import tomllib
-import webbrowser
 from pathlib import Path
 from typing import TYPE_CHECKING
 from urllib.parse import urlparse
 
+from .browsers import open_url as open_in_browser
 from .command_trie import CommandTrie
 from .icon_manager import command_source_icon_path
 from .settings import Settings, toml_str, toml_value
@@ -37,6 +37,8 @@ def _serialize_command(cmd: dict) -> str:
     lines.append(f"description = {toml_str(cmd.get('description', ''))}")
     if cmd.get("icon"):
         lines.append(f"icon = {toml_str(cmd['icon'])}")
+    if cmd.get("browser"):
+        lines.append(f"browser = {toml_str(cmd['browser'])}")
     for key in (*ICON_RECIPE_KEYS, ICON_SOURCE_DATA_KEY):
         if cmd.get(key):
             lines.append(f"{key} = {toml_str(cmd[key])}")
@@ -188,6 +190,7 @@ class CommandManager:
                 "location": location,
                 "times_executed": self.run_counts.get(str(name), 0),
                 "_path": Path(location).expanduser() if cmd_type == "file" else None,
+                "browser": str(cmd_data.get("browser") or "") or None,
                 **_recipe_fields(cmd_data),
             }
 
@@ -316,6 +319,8 @@ class CommandManager:
         }
         if command.get("icon"):
             entry["icon"] = command["icon"]
+        if command.get("browser") and entry["type"] == "url":
+            entry["browser"] = command["browser"]
 
         for i, existing in enumerate(commands):
             if existing.get("name") == match_name:
@@ -462,6 +467,8 @@ class CommandManager:
                 "type": cmd_type,
                 **self._portable_recipe(cmd),
             }
+            if cmd.get("browser"):
+                entry["browser"] = cmd["browser"]
             portable.append(entry)
 
         blocks = [_serialize_command(cmd) for cmd in portable]
@@ -514,7 +521,7 @@ class CommandManager:
                 "description": cmd_data.get("description", ""),
                 "type": cmd_type,
             }
-            for key in (*ICON_RECIPE_KEYS, ICON_SOURCE_DATA_KEY):
+            for key in (*ICON_RECIPE_KEYS, ICON_SOURCE_DATA_KEY, "browser"):
                 if cmd_data.get(key):
                     candidate[key] = str(cmd_data[key])
             candidate["_error"], candidate["_conflict"] = self.check_import_candidate(candidate)
@@ -562,6 +569,8 @@ class CommandManager:
             if candidate.get("icon"):
                 # Set when the user styled the command in the editor before importing.
                 entry["icon"] = candidate["icon"]
+            if candidate.get("browser") and cmd_type == "url":
+                entry["browser"] = candidate["browser"]
             commands.append(entry)
             for keyword in keywords:
                 text = str(keyword).strip()
@@ -682,7 +691,7 @@ class CommandManager:
             if cmd_type == "system":
                 self._execute_system_command(main_window, cmd["action"])
             elif cmd_type == "url":
-                self._open_url(cmd["location"])
+                self._open_url(cmd["location"], cmd.get("browser") or self.settings.general.browser)
             else:
                 self._open_file(cmd.get("_path") or cmd["location"])
             print(f"Executing: {cmd['description']}")
@@ -709,9 +718,8 @@ class CommandManager:
             raise FileNotFoundError(f"The target no longer exists:\n{path}")
         os.startfile(path)
 
-    def _open_url(self, url: str):
-        """Open a URL in the default browser"""
+    def _open_url(self, url: str, browser_key: str | None = None):
+        """Open a URL in the command's browser, the configured one, or the default."""
         if not url.startswith(("http://", "https://")):
             url = "https://" + url
-        if not webbrowser.open(url):
-            raise OSError(f"No web browser could be opened for {url}")
+        open_in_browser(url, browser_key)
