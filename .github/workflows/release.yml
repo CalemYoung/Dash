@@ -81,3 +81,38 @@ jobs:
           files: |
             dist/DashSetup-*.exe
             dist/DashSetup-*.exe.sha256
+
+  # Releases published by the job above use the workflow's own token, and
+  # events raised with that token never trigger other workflows, so the
+  # winget submission has to live here rather than in an on-release workflow.
+  #
+  # Needs, once: a fork of microsoft/winget-pkgs under the account that owns
+  # a repository secret WINGET_TOKEN (fine-grained token on that fork with
+  # Contents and Pull requests read/write). Without the secret this job
+  # explains itself and exits cleanly.
+  winget:
+    needs: build-and-release
+    if: github.ref_type == 'tag'
+    runs-on: windows-latest
+    steps:
+      - name: Check for token
+        id: token
+        shell: pwsh
+        env:
+          WINGET_TOKEN: ${{ secrets.WINGET_TOKEN }}
+        run: |
+          if ([string]::IsNullOrEmpty($env:WINGET_TOKEN)) {
+            Write-Host "WINGET_TOKEN secret is not set; skipping the winget submission."
+            "present=false" >> $env:GITHUB_OUTPUT
+          } else {
+            "present=true" >> $env:GITHUB_OUTPUT
+          }
+
+      - name: Submit manifest update to winget-pkgs
+        if: steps.token.outputs.present == 'true'
+        uses: vedantmgoyal9/winget-releaser@v2
+        with:
+          identifier: CalemYoung.Dash
+          installers-regex: 'DashSetup-.*\.exe$'
+          max-versions-to-keep: 5
+          token: ${{ secrets.WINGET_TOKEN }}
