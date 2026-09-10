@@ -43,6 +43,14 @@ class CommandType(IntEnum):
         return "url" if self is CommandType.URL else "file"
 
 
+def _retain_space(widget):
+    """Keep a hidden label's row in the layout so showing it later does not
+    push or clip its neighbours inside a fixed-height editor."""
+    policy = widget.sizePolicy()
+    policy.setRetainSizeWhenHidden(True)
+    widget.setSizePolicy(policy)
+
+
 class FlowLayout(QLayout):
     """Lays items out left to right, wrapping to a new line when the width
     runs out, and reports the height that needs. The standard Qt flow layout,
@@ -187,6 +195,7 @@ class AliasBox(QFrame):
 
         self.error_label = QLabel()
         self.error_label.setObjectName("validationMessage")
+        _retain_space(self.error_label)
         self.error_label.hide()
 
         outer_layout = QVBoxLayout(self)
@@ -633,7 +642,11 @@ class CommandEditorPanel(QFrame):
         self.command_name_edit_box.setPlaceholderText("Command Name")
         self.validation_message = QLabel()
         self.validation_message.setObjectName("validationMessage")
+        _retain_space(self.validation_message)
         self.validation_message.hide()
+        # Say so as soon as the name is left, not when Save is eventually hit.
+        self.command_name_edit_box.editingFinished.connect(self._validate_name)
+        self.command_name_edit_box.textEdited.connect(lambda _text: self.validation_message.hide())
 
         command_name_row = QHBoxLayout()
         command_name_row.addWidget(self._command_icon)
@@ -741,8 +754,10 @@ class CommandEditorPanel(QFrame):
         self.save_shortcut.setKeys(key_sequences(save_key))
         self.save_shortcut.setContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
         self.save_shortcut.activated.connect(self._save_and_close)
-        self.keyboard_hint = QLabel(f"Esc: close without saving   |   {format_shortcut(save_key)}: save")
+        self.keyboard_hint = QLabel(f"Esc discards  ·  {format_shortcut(save_key)} saves")
         self.keyboard_hint.setObjectName("footerHint")
+        _retain_space(self.keyboard_hint)
+        self.keyboard_hint.hide()
         layout.addWidget(self.keyboard_hint, 0, Qt.AlignmentFlag.AlignRight)
 
         self._populate(self._command)
@@ -834,6 +849,9 @@ class CommandEditorPanel(QFrame):
         self.close_button.setVisible(not dirty)
         self.cancel_button.setVisible(dirty)
         self.save_button.setVisible(dirty)
+        # The hint explains Cancel and Save, so it only makes sense beside them.
+        if hasattr(self, "keyboard_hint"):
+            self.keyboard_hint.setVisible(dirty)
 
     def _apply_command_icon(self, icon):
         # A null icon means the action editor had nothing to resolve
@@ -889,16 +907,28 @@ class CommandEditorPanel(QFrame):
 
     def _validate_new_alias(self, alias: str) -> str | None:
         """Check only the alias being added, against the name, the existing
-        aliases and other commands. Problems among aliases that are already
-        there are reported at Save, not blamed on whatever is typed next."""
-        entry = self._collect() or {"name": ""}
-        name = str(entry.get("name", "")).strip()
+        aliases and other commands. Problems with the name or with aliases
+        that are already there are reported elsewhere, not blamed on whatever
+        is typed next."""
+        name = self.command_name_edit_box.text().strip()
         if not name:
             return "Set the command name before adding aliases."
         if alias.casefold() == name.casefold():
             return "That is already the command's name."
-        entry["aliases"] = [alias]
-        return self.cmd_manager.validate_command(entry, self._original_name, validate_target=False)
+        # Validated as if it were a name: the same keyword rules apply, and this
+        # leaves the (possibly conflicting) real name out of the check.
+        return self.cmd_manager.validate_command({"name": alias, "aliases": []}, self._original_name, validate_target=False)
+
+    def _validate_name(self):
+        """Name check on focus-out: empty is left to the placeholder, a clash
+        with another command or with this command's own aliases is shown at once."""
+        name = self.command_name_edit_box.text().strip()
+        error = None
+        if name:
+            entry = {"name": name, "aliases": self.alias_box.alias_texts()}
+            error = self.cmd_manager.validate_command(entry, self._original_name, validate_target=False)
+        self.validation_message.setText(error or "")
+        self.validation_message.setVisible(bool(error))
 
     def _show_validation_error(self, message):
         self.validation_message.setText(message)
