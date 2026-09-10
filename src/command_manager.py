@@ -716,7 +716,11 @@ class CommandManager:
 
         if not path.exists():
             raise FileNotFoundError(f"The target no longer exists:\n{path}")
-        os.startfile(path)
+        # Start programs in their own folder, as Explorer does. Many apps look
+        # for config and data next to the executable and fail when launched
+        # with Dash's working directory instead.
+        working_dir = str(path.parent) if path.is_file() else None
+        os.startfile(str(path), cwd=working_dir)
 
     def _open_url(self, url: str, browser_key: str | None = None):
         """Open a URL in the command's browser, the configured one, or the default."""
