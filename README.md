@@ -3,11 +3,11 @@
 </h1>
 
 <p align="center">
-   <strong>A fast, keyboard-first launcher for Windows.</strong>
+   <strong>A keyboard launcher for Windows that only knows the commands you gave it.</strong>
 </p>
 
 <p align="center">
-   Open apps, files, folders, and websites without leaving your keyboard.
+   Type a few letters, press Enter, and the same thing opens every time.
 </p>
 
 <p align="center">
@@ -19,11 +19,34 @@
 
 ---
 
+## Why another launcher
+
+Dash came out of using launchers that index everything on the machine. They
+lagged while typing, and now and then the results reordered between one
+keystroke and the next, so typing fast and hitting Enter opened the wrong
+thing.
+
+Dash does less on purpose:
+
+- **Only your commands.** Nothing is indexed. The list holds what you added,
+  so there is nothing in the results you don't care about. A one-off scan can
+  import your installed programs as a starting point, but you choose what
+  stays.
+- **Predictable matching.** Results are prefix matches on names and aliases.
+  The same letters always narrow to the same commands, an exact name or alias
+  always comes first, and the rest follow a rule you pick (alphabetical or
+  most used) rather than a relevance score that shifts as you type.
+- **Nothing between you and the command.** No plugins, no web results, no
+  file search. Open, type, Enter.
+
+If you want a launcher that searches your files and the web, there are good
+ones. Dash is for when you already know what you are going to type.
+
 ## Features
 
 - **Instant access:** Open Dash from anywhere with the global `Alt+F` hotkey.
 - **Flexible commands:** Launch applications, files, folders, and URLs from one search box.
-- **Fast matching:** Find commands by name or add aliases for the terms you naturally type.
+- **Aliases:** Add the terms you naturally type, so `gh` can open GitHub and `mail` your inbox.
 - **Quick calculations:** Evaluate mathematical expressions without opening another app.
 - **Command tree:** Optionally show a side panel that maps how each letter you type narrows the matches. Turn it on under Settings.
 - **Made to fit:** Customize commands, icons, settings, and startup behavior.
