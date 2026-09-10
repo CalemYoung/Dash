@@ -96,9 +96,10 @@ Or by hand:
     or start when you sign in.
 3. Press `Alt+F` to open Dash.
 
-Until you have added a command, opening Dash shows a single row offering to
-scan your installed programs and common Windows folders and tools. Press Enter
-on it to run the scan, or run it again any time from Settings.
+Until you have added a command, opening Dash shows two rows: an offer to
+scan your installed programs and common Windows folders and tools, and the
+Settings command beneath it. Press Enter on the first to run the scan, or run
+it again any time from Settings.
 
 Use the system tray menu to open settings or manage commands. Dash stores your
 configuration in `%APPDATA%\Dash`, so upgrades keep your settings and commands.

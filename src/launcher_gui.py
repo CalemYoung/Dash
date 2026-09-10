@@ -1412,6 +1412,20 @@ class MainWindow(QMainWindow):
         )
         item.setSizeHint(row.sizeHint())
         self.results_list_widget.setItemWidget(item, row)
+        # Settings is always there, so it is offered here too: it is where
+        # the hotkey, the display and the import tools live.
+        for command in self.cmd_manager.commands.values():
+            if command.get("type") != "system":
+                continue
+            item = QListWidgetItem(self.results_list_widget)
+            row = ResultRow(
+                self,
+                icon_path=self.icon_manager.get_icon_path(command),
+                command=command["name"],
+                description=command.get("description", "") if self.settings.search.show_descriptions else "",
+            )
+            item.setSizeHint(row.sizeHint())
+            self.results_list_widget.setItemWidget(item, row)
         self.results_list_widget.setCurrentRow(0)
         self._snap_results_height()
 
