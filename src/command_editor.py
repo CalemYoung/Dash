@@ -753,7 +753,10 @@ class CommandEditorPanel(QFrame):
         command_type_row.addWidget(command_type_row_label)
         command_type_row.addWidget(self.command_type_selector)
 
-        self.delete_command_btn = QPushButton()
+        # The bottom-row buttons are parented straight away: their visibility
+        # is set while the panel is still being built, and a parentless widget
+        # made visible is a top-level window, which Windows flashes on screen.
+        self.delete_command_btn = QPushButton(self)
         self.delete_command_btn.setObjectName("DeleteCommandObject")
         self.delete_command_btn.setText("Delete command")
         self.delete_command_btn.setCursor(Qt.CursorShape.PointingHandCursor)
@@ -764,18 +767,18 @@ class CommandEditorPanel(QFrame):
         # Reset is likewise only for stored commands, and only while there is
         # something to reset. It takes effect immediately, like Delete: it is
         # not part of the Save/Cancel edit cycle.
-        self.reset_count_btn = QPushButton()
+        self.reset_count_btn = QPushButton(self)
         self.reset_count_btn.setObjectName("ResetRunCountButton")
         self.reset_count_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self.reset_count_btn.clicked.connect(self._reset_run_count)
         self._refresh_reset_button()
-        self.close_button = QPushButton("Close")
+        self.close_button = QPushButton("Close", self)
         self.close_button.setCursor(Qt.CursorShape.PointingHandCursor)
         self.close_button.clicked.connect(self._cancel_and_close)
-        self.cancel_button = QPushButton("Cancel")
+        self.cancel_button = QPushButton("Cancel", self)
         self.cancel_button.setCursor(Qt.CursorShape.PointingHandCursor)
         self.cancel_button.clicked.connect(self._cancel_and_close)
-        self.save_button = QPushButton("Save")
+        self.save_button = QPushButton("Save", self)
         self.save_button.setCursor(Qt.CursorShape.PointingHandCursor)
         self.save_button.setDefault(True)
         self.save_button.clicked.connect(self._save_and_close)
@@ -844,6 +847,7 @@ class CommandEditorPanel(QFrame):
         self.command_action.browserChanged.connect(self._update_dirty_state)
         self.alias_box.aliasesChanged.connect(self._update_dirty_state)
         self.alias_box.aliasesChanged.connect(self.layoutChanged)
+        self._built = True
         self._update_dirty_state()
 
         # Explicit tab order so focus follows the visual top-to-bottom flow.
@@ -921,6 +925,10 @@ class CommandEditorPanel(QFrame):
         )
 
     def _update_dirty_state(self):
+        # Icon and text signals fire during construction, before every widget
+        # is in place; the state is applied once building is done.
+        if not getattr(self, "_built", False):
+            return
         dirty = self._is_dirty()
         self.close_button.setVisible(not dirty)
         self.cancel_button.setVisible(dirty)

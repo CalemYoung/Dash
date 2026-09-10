@@ -1302,6 +1302,9 @@ class MainWindow(QMainWindow):
             self.view_stack.setCurrentWidget(panel)
         finally:
             self.setUpdatesEnabled(True)
+        # Paint the new page now rather than on the next event-loop pass, so
+        # the compositor has as little time as possible to show the old one.
+        self.repaint()
         panel.command_name_edit_box.setFocus()
 
     def _fit_editor_panel(self, settle=True):
@@ -1345,6 +1348,7 @@ class MainWindow(QMainWindow):
             pin_within_screen(self, self._search_view_size, getattr(self, "_editor_return_center", None))
         finally:
             self.setUpdatesEnabled(True)
+        self.repaint()
         panel.deleteLater()
         if hasattr(self, "_editor_return_center"):
             del self._editor_return_center
