@@ -644,6 +644,38 @@ class MainWindow(QMainWindow):
             self._tray_retry_count += 1
             print(f"Tray icon not visible, retrying... ({self._tray_retry_count}/{TRAY_SETUP_RETRIES})")
             QTimer.singleShot(TRAY_SETUP_RETRY_MS, self._setup_tray)
+            return
+        self._show_first_start_notice()
+
+    def _first_start_marker(self) -> Path:
+        # Beside the config, which installs and updates leave alone.
+        return self._settings_path().parent / "first_start_shown"
+
+    def _show_first_start_notice(self):
+        """Once, on the very first start after installing: how to get back.
+
+        Dash lives in the tray and vanishes on Esc, and nothing else on screen
+        says how to open it again. Updates keep the config folder, so the
+        marker written here also keeps the notice from repeating after them.
+        """
+        marker = self._first_start_marker()
+        if marker.exists() or self.tray is None:
+            return
+        try:
+            marker.parent.mkdir(parents=True, exist_ok=True)
+            marker.write_text("shown", encoding="utf-8")
+        except OSError:
+            return
+        # An install that already has commands predates the notice: it is an
+        # update, not a first install, and gets the marker without the notice.
+        if self.cmd_manager.has_user_commands():
+            return
+        self.tray.showMessage(
+            "Dash is running",
+            f"Press {self._format_shortcut(self.settings.general.hotkey)} to open it from anywhere.",
+            QSystemTrayIcon.MessageIcon.Information,
+            10000,
+        )
 
     def setup_tray_icon(self):
         """Create and configure system tray icon with menu"""
@@ -1186,6 +1218,7 @@ class MainWindow(QMainWindow):
         if dialog.exec() != dialog.DialogCode.Accepted:
             return
 
+        first_import = not self.cmd_manager.has_user_commands()
         summary = self.cmd_manager.import_program_commands(dialog.selected_candidates())
         if summary["imported"]:
             self.cmd_manager.reprocess_command_icons(self.icon_manager)
@@ -1198,7 +1231,7 @@ class MainWindow(QMainWindow):
             message += f". Skipped {skipped_count} already-present or conflicting candidate"
             if skipped_count != 1:
                 message += "s"
-        QMessageBox.information(self, "Add Installed Programs", message + ".")
+        QMessageBox.information(self, "Add Installed Programs", message + "." + self._first_import_tip(first_import and bool(summary["imported"])))
 
         if self.user_text:
             self.cmd_manager.get_matching_commands(self, self.user_text)
@@ -1242,6 +1275,7 @@ class MainWindow(QMainWindow):
         if not selected:
             return
 
+        first_import = not self.cmd_manager.has_user_commands()
         summary = self.cmd_manager.import_commands(selected)
         if summary["imported"]:
             self.cmd_manager.reprocess_command_icons(self.icon_manager)
@@ -1254,7 +1288,14 @@ class MainWindow(QMainWindow):
             message += f". Skipped {skipped_count} invalid or conflicting command"
             if skipped_count != 1:
                 message += "s"
-        QMessageBox.information(self, "Import Commands", message + ".")
+        QMessageBox.information(self, "Import Commands", message + "." + self._first_import_tip(first_import and bool(summary["imported"])))
+
+    def _first_import_tip(self, first_import: bool) -> str:
+        """The one thing worth saying once the list stops being empty."""
+        if not first_import:
+            return ""
+        edit = self._format_shortcut(self.settings.shortcuts.edit_selected_command)
+        return f"\n\nType a few letters and press Enter to open a command. {edit} on a result edits it, including its aliases."
 
         if self.user_text:
             self.cmd_manager.get_matching_commands(self, self.user_text)
@@ -1403,11 +1444,12 @@ class MainWindow(QMainWindow):
         self._sync_search_view_size()
         item = QListWidgetItem(self.results_list_widget)
         new_command = self._format_shortcut(self.settings.shortcuts.new_command)
+        hotkey = self._format_shortcut(self.settings.general.hotkey)
         row = ResultRow(
             self,
             icon_path=self.settings.paths.program_icon,
             command="Add your installed programs",
-            description=f"Nothing here yet. Press Enter to scan this PC, or {new_command} to add a command by hand.",
+            description=f"Enter scans this PC. {new_command} adds one by hand. {hotkey} opens Dash anywhere.",
             action=self.choose_recent_programs,
         )
         item.setSizeHint(row.sizeHint())
