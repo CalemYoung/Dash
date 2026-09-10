@@ -1,3 +1,4 @@
+import itertools
 import sys
 
 from PyQt6.QtCore import QObject, pyqtSignal
@@ -15,82 +16,74 @@ def _running_as_admin() -> bool:
         return False
 
 
+# Every physical key the hook may report for a modifier name. Right Alt is
+# delivered as Key.alt_gr (pynput maps its virtual key to that member), so
+# Key.alt_r would never match an actual key press.
+MODIFIER_VARIANTS = {
+    "alt": (Key.alt_l, Key.alt_gr, Key.alt),
+    "ctrl": (Key.ctrl_l, Key.ctrl_r, Key.ctrl),
+    "control": (Key.ctrl_l, Key.ctrl_r, Key.ctrl),
+    "shift": (Key.shift_l, Key.shift_r, Key.shift),
+    "win": (Key.cmd, Key.cmd_r),
+    "cmd": (Key.cmd, Key.cmd_r),
+    "meta": (Key.cmd, Key.cmd_r),
+}
+
+SPECIAL_KEYS = {
+    "enter": Key.enter,
+    "return": Key.enter,
+    "tab": Key.tab,
+    "space": Key.space,
+    "esc": Key.esc,
+    "escape": Key.esc,
+    "backspace": Key.backspace,
+    "delete": Key.delete,
+    "up": Key.up,
+    "down": Key.down,
+    "left": Key.left,
+    "right": Key.right,
+    **{f"f{n}": getattr(Key, f"f{n}") for n in range(1, 13)},
+}
+
+
 class HotkeyListener(QObject):
     triggered = pyqtSignal(bool)
 
     def __init__(self, hotkey="alt+f"):
         super().__init__()
         self.hotkey = hotkey
-        self.hotkey_id = None
+        self.hotkey_ids = []
         self._parse_and_register()
         print(f"Hotkey Listener registered: {hotkey}")
 
     def _parse_and_register(self):
-        """Parse hotkey string and register with PyHotKey"""
-        parts = self.hotkey.lower().split("+")
-        key_list = []
+        """Register the hotkey string once per physical modifier combination.
 
-        # Map string names to PyHotKey Key objects
-        key_map = {
-            "alt": Key.alt_l,
-            "ctrl": Key.ctrl_l,
-            "control": Key.ctrl_l,
-            "shift": Key.shift_l,
-            "win": Key.cmd_l,
-            "cmd": Key.cmd_l,
-            "meta": Key.cmd_l,
-            # Special keys
-            "enter": Key.enter,
-            "return": Key.enter,
-            "tab": Key.tab,
-            "space": Key.space,
-            "esc": Key.esc,
-            "backspace": Key.backspace,
-            "delete": Key.delete,
-            # Arrow keys
-            "up": Key.up,
-            "down": Key.down,
-            "left": Key.left,
-            "right": Key.right,
-            # Function keys
-            "f1": Key.f1,
-            "f2": Key.f2,
-            "f3": Key.f3,
-            "f4": Key.f4,
-            "f5": Key.f5,
-            "f6": Key.f6,
-            "f7": Key.f7,
-            "f8": Key.f8,
-            "f9": Key.f9,
-            "f10": Key.f10,
-            "f11": Key.f11,
-            "f12": Key.f12,
-        }
+        Settings store a side-agnostic "Alt+G", but the keyboard hook reports
+        the left and right keys as different keys, and remote-desktop and
+        remapping tools can send the generic code for either side. PyHotKey
+        matches keys by name, so a single registration would bind exactly one
+        physical key. Register every combination instead; they all fire the
+        same callback.
+        """
+        parts = [part.strip() for part in self.hotkey.lower().split("+") if part.strip()]
+        alternatives = [MODIFIER_VARIANTS.get(part) or (SPECIAL_KEYS.get(part, part),) for part in parts]
 
-        for part in parts:
-            part = part.strip()
-            if part in key_map:
-                key_list.append(key_map[part])
-            else:
-                # Regular character key (letter, number, symbol)
-                key_list.append(part)
+        combos = [list(combo) for combo in itertools.product(*alternatives)]
+        # AltGr (right Alt on many non-US layouts) arrives as a fake left Ctrl
+        # press followed by right Alt, so an Alt-only hotkey needs a Ctrl variant.
+        if "alt" in parts and not ({"ctrl", "control"} & set(parts)):
+            combos += [[Key.ctrl_l] + combo for combo in combos if Key.alt_gr in combo]
 
-        print(f"Registering hotkey: {key_list}")
-
-        # Register the hotkey with PyHotKey
-        # Returns hotkey ID, or -1 if already registered, or 0 if invalid
-        self.hotkey_id = keyboard.register_hotkey(
-            key_list,
-            None,  # tap count (None for combination hotkey)
-            self.on_activate,
-        )
-
-        if self.hotkey_id == -1:
-            print("Warning: Hotkey already registered!")
-        elif self.hotkey_id == 0:
-            print("Error: Invalid hotkey parameters!")
-        else:
-            print(f"Hotkey registered with ID: {self.hotkey_id}")
+        print(f"Registering hotkey: {parts} ({len(combos)} key combinations)")
+        self.hotkey_ids = []
+        for combo in combos:
+            # Returns a hotkey ID, -1 if already registered, or 0 if invalid
+            hotkey_id = keyboard.register_hotkey(combo, None, self.on_activate)
+            if hotkey_id > 0:
+                self.hotkey_ids.append(hotkey_id)
+        if not self.hotkey_ids:
+            print("Error: hotkey could not be registered!")
 
         # Suppressing the hotkey keeps the keystroke from reaching the app that
         # had focus. PyHotKey can only do that with an elevated process; without
@@ -106,8 +99,9 @@ class HotkeyListener(QObject):
 
     def stop(self):
         """Stop listening for hotkey"""
-        if self.hotkey_id and self.hotkey_id > 0:
-            keyboard.unregister_hotkey_by_id(self.hotkey_id)
+        for hotkey_id in self.hotkey_ids:
+            keyboard.unregister_hotkey_by_id(hotkey_id)
+        self.hotkey_ids = []
         keyboard.suppress_hotkey = False
 
     def update_hotkey(self, hotkey):

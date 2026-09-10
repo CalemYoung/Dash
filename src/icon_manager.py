@@ -40,6 +40,32 @@ def command_source_icon_path(command_name) -> Path:
     return get_user_icon_dir() / f"{command_icon_stem(command_name)}.source.png"
 
 
+# Second-level labels that are public suffixes with a two-letter country code,
+# so bbc.co.uk stops at bbc.co.uk rather than at co.uk.
+_PUBLIC_SECOND_LEVELS = {"co", "com", "org", "net", "gov", "edu", "ac"}
+
+
+def _favicon_hosts(netloc):
+    """The host and its parent domains, most specific first.
+
+    app.docusign.com -> ["app.docusign.com", "docusign.com"]
+    news.bbc.co.uk -> ["news.bbc.co.uk", "bbc.co.uk"]
+    """
+    host = netloc.rsplit("@", 1)[-1].split(":")[0].strip().lower().rstrip(".")
+    if not host:
+        return []
+    hosts = [host]
+    labels = host.split(".")
+    if all(label.isdigit() for label in labels):
+        return hosts  # an IP address has no parent domains
+    while len(labels) > 2:
+        labels = labels[1:]
+        if len(labels) == 2 and labels[0] in _PUBLIC_SECOND_LEVELS and len(labels[1]) == 2:
+            break
+        hosts.append(".".join(labels))
+    return hosts
+
+
 class IconManager:
     def __init__(self, settings):
         self.settings = settings
@@ -549,7 +575,12 @@ class IconManager:
         return None if best.isNull() else best
 
     def _favicon_sources(self, url):
-        """Candidate favicon URLs, highest expected resolution first."""
+        """Candidate favicon URLs, highest expected resolution first.
+
+        The exact host is tried first, then each parent domain: an app
+        subdomain such as app.docusign.com often serves no icon of its own
+        (and refuses direct requests), while docusign.com does.
+        """
         from urllib.parse import urlparse
 
         parsed = urlparse(url)
@@ -558,11 +589,14 @@ class IconManager:
             return []
 
         scheme = parsed.scheme or "https"
-        return [
-            f"https://www.google.com/s2/favicons?domain={domain}&sz=256",
-            f"https://icons.duckduckgo.com/ip3/{domain}.ico",
-            f"{scheme}://{domain}/favicon.ico",
-        ]
+        sources = []
+        for host in _favicon_hosts(domain):
+            sources += [
+                f"https://www.google.com/s2/favicons?domain={host}&sz=256",
+                f"https://icons.duckduckgo.com/ip3/{host}.ico",
+                f"{scheme}://{host}/favicon.ico",
+            ]
+        return sources
 
     def _get_favicon_for_url(self, url):
         """Get favicon for a website URL automatically"""
