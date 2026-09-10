@@ -19,6 +19,11 @@
 #define MyAppDescription "A quick program launcher for Windows"
 
 [Setup]
+; Note the doubled closing brace: Inno escapes "{{" to "{" but leaves "}}"
+; as is, so the real AppId (and the Add/Remove Programs key, and the winget
+; ProductCode) is "{88DC9BD4-16FC-452E-87DD-4B0F54603ED1}}". It has been
+; that way since the first release. Do not "fix" it: a changed AppId makes
+; every existing install look like a different product.
 AppId={{88DC9BD4-16FC-452E-87DD-4B0F54603ED1}}
 AppName={#MyAppName}
 AppVersion={#MyAppVersion}
