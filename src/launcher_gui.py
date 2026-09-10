@@ -1293,17 +1293,28 @@ class MainWindow(QMainWindow):
         panel.closed.connect(self.close_editor)
         panel.layoutChanged.connect(self._fit_editor_panel)
         self._editor_panel = panel
-        self.view_stack.addWidget(panel)
-        self.view_stack.setCurrentWidget(panel)
         self._pre_editor_size = self.size()
-        self._fit_editor_panel()
+        # Size the window before the editor page is shown, with painting held
+        # off for the switch, so the editor never flashes at the search size.
+        self.setUpdatesEnabled(False)
+        try:
+            self.view_stack.addWidget(panel)
+            self._fit_editor_panel()
+            self.view_stack.setCurrentWidget(panel)
+        finally:
+            self.setUpdatesEnabled(True)
         panel.command_name_edit_box.setFocus()
 
-    def _fit_editor_panel(self):
+    def _fit_editor_panel(self, settle=True):
         """Pin the window to the editor size, but never below what the panel
         needs right now: switching to the URL type adds a row and alias chips
         wrap onto new lines, and a fixed height that is too short squeezes
-        the fields until they are clipped."""
+        the fields until they are clipped.
+
+        The layout applies the change on the next pass through the event
+        loop, so one more measurement is taken after that pass in case a
+        row wrapped differently once real geometry was in place.
+        """
         panel = self._editor_panel
         if panel is None:
             return
@@ -1313,10 +1324,11 @@ class MainWindow(QMainWindow):
             max(self.settings.ui.editor_height, panel.needed_height(width)),
             available_geometry_for(self),
         )
-        if editor_size == self.size():
-            return
-        self.setFixedSize(editor_size)
-        move_within_screen(self, editor_size, self._editor_return_center)
+        if editor_size != self.size():
+            self.setFixedSize(editor_size)
+            move_within_screen(self, editor_size, self._editor_return_center)
+        if settle:
+            QTimer.singleShot(0, lambda: self._fit_editor_panel(settle=False))
 
     def close_editor(self):
         """Return to the search view after the editor saves in the background."""
@@ -1324,8 +1336,12 @@ class MainWindow(QMainWindow):
         if panel is None:
             return
         self._editor_panel = None
-        self.view_stack.setCurrentWidget(self.central_widget)
-        self.view_stack.removeWidget(panel)
+        self.setUpdatesEnabled(False)
+        try:
+            self.view_stack.setCurrentWidget(self.central_widget)
+            self.view_stack.removeWidget(panel)
+        finally:
+            self.setUpdatesEnabled(True)
         panel.deleteLater()
         # Pin back to the search-view size. The stack keeps the editor's large
         # size hint, so releasing the constraint would let the window re-expand;

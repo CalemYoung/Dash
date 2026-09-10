@@ -2,7 +2,7 @@ from dataclasses import asdict
 from pathlib import Path
 from typing import Any, cast
 
-from PyQt6.QtCore import QEvent, QFileInfo, QPointF, QRect, QSize, Qt, pyqtSignal
+from PyQt6.QtCore import QEvent, QFileInfo, QPointF, QRect, QSize, Qt, QTimer, pyqtSignal
 from PyQt6.QtGui import QColor, QIcon, QKeySequence, QLinearGradient, QPainter, QPen, QShortcut
 from PyQt6.QtWidgets import (
     QApplication,
@@ -323,18 +323,20 @@ class CommandEditDialog(DragToMoveMixin, QDialog):
         self._editor_height = settings.ui.editor_height
         self._fit_panel()
 
-    def _fit_panel(self):
+    def _fit_panel(self, settle=True):
         """Pinned (the alias chips flow to the width), but never shorter than
         the panel needs right now, so nothing gets clipped when the URL type
         adds a row or aliases wrap. The screen clamp still shrinks it on a
-        small display."""
+        small display. A second measurement follows the layout pass, as in
+        the in-window editor."""
         height = max(self._editor_height, self.panel.needed_height(self._width))
-        if QSize(self._width, height) == self.size():
-            return
-        self.setFixedSize(self._width, height)
-        if self.isVisible():
-            parent = self.parentWidget()
-            fit_within_screen(self, parent.frameGeometry().center() if parent is not None else None)
+        if QSize(self._width, height) != self.size():
+            self.setFixedSize(self._width, height)
+            if self.isVisible():
+                parent = self.parentWidget()
+                fit_within_screen(self, parent.frameGeometry().center() if parent is not None else None)
+        if settle:
+            QTimer.singleShot(0, lambda: self._fit_panel(settle=False))
 
     def showEvent(self, event):
         super().showEvent(event)

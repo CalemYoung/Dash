@@ -43,6 +43,22 @@ class CommandType(IntEnum):
         return "url" if self is CommandType.URL else "file"
 
 
+def _invalidate_layout_tree(layout):
+    """Drop cached size data in `layout` and every layout nested under it,
+    including the layouts of child widgets."""
+    if layout is None:
+        return
+    layout.invalidate()
+    for index in range(layout.count()):
+        item = layout.itemAt(index)
+        if item is None:
+            continue
+        if item.layout() is not None:
+            _invalidate_layout_tree(item.layout())
+        elif item.widget() is not None:
+            _invalidate_layout_tree(item.widget().layout())
+
+
 def _retain_space(widget):
     """Keep a hidden label's row in the layout so showing it later does not
     push or clip its neighbours inside a fixed-height editor."""
@@ -638,8 +654,15 @@ class CommandEditorPanel(QFrame):
     layoutChanged = pyqtSignal()
 
     def needed_height(self, width: int) -> int:
-        """Height that shows every visible field at `width` without squeezing."""
+        """Height that shows every visible field at `width` without squeezing.
+
+        Box layouts cache their height-for-width by width, and adding an
+        alias chip or toggling a row does not always reach every nested
+        layout, so a repeat query at the same width can return the old
+        answer. Invalidate the whole tree first so the measurement is fresh.
+        """
         layout = self.layout()
+        _invalidate_layout_tree(layout)
         if layout.hasHeightForWidth():
             return layout.totalHeightForWidth(width)
         return self.sizeHint().height()
