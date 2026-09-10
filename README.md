@@ -59,6 +59,14 @@ matches. Turn it on under Settings.
 
 ## Install
 
+With winget:
+
+```powershell
+winget install CalemYoung.Dash
+```
+
+Or by hand:
+
 1. Download `DashSetup-<version>.exe` from the
    [Releases page](https://github.com/CalemYoung/Dash/releases).
 2. Run the installer and choose whether Dash should create a desktop shortcut

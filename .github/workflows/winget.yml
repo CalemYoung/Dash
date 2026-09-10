@@ -1,0 +1,43 @@
+name: Publish to winget
+
+# After the first manifest for CalemYoung.Dash has been accepted into
+# microsoft/winget-pkgs, this opens the update PR for each new release.
+#
+# Needs, once:
+#   - a fork of https://github.com/microsoft/winget-pkgs under the same
+#     account that owns the token below;
+#   - a repository secret WINGET_TOKEN holding a fine-grained GitHub token
+#     with "Contents: read and write" and "Pull requests: read and write" on
+#     that fork (classic tokens: the public_repo scope).
+# Without the secret the job explains itself and exits without failing.
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+
+jobs:
+  winget:
+    runs-on: windows-latest
+    steps:
+      - name: Check for token
+        id: token
+        shell: pwsh
+        env:
+          WINGET_TOKEN: ${{ secrets.WINGET_TOKEN }}
+        run: |
+          if ([string]::IsNullOrEmpty($env:WINGET_TOKEN)) {
+            Write-Host "WINGET_TOKEN secret is not set; skipping the winget submission."
+            "present=false" >> $env:GITHUB_OUTPUT
+          } else {
+            "present=true" >> $env:GITHUB_OUTPUT
+          }
+
+      - name: Submit manifest update
+        if: steps.token.outputs.present == 'true'
+        uses: vedantmgoyal9/winget-releaser@v2
+        with:
+          identifier: CalemYoung.Dash
+          installers-regex: 'DashSetup-.*\.exe$'
+          max-versions-to-keep: 5
+          token: ${{ secrets.WINGET_TOKEN }}

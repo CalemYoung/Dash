@@ -18,8 +18,10 @@ from PyQt6.QtNetwork import QNetworkAccessManager, QNetworkReply, QNetworkReques
 INSTALLER_PREFIX = "DashSetup-"
 CHECKSUM_SUFFIX = ".sha256"
 # Inno Setup switches: quiet install with a small progress window, close the
-# running Dash via the Restart Manager, never trigger a Windows restart.
-INSTALLER_ARGS = ("/SILENT", "/CLOSEAPPLICATIONS", "/NORESTART")
+# running Dash via the Restart Manager, never trigger a Windows restart, and
+# relaunch Dash afterwards (silent installs otherwise stay silent, so package
+# managers do not get an app popping up mid-install).
+INSTALLER_ARGS = ("/SILENT", "/CLOSEAPPLICATIONS", "/NORESTART", "/RELAUNCH=1")
 
 
 @dataclass(frozen=True)

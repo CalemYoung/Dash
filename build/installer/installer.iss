@@ -114,9 +114,11 @@ Root: HKCU; Subkey: "Software\{#MyAppPublisher}\{#MyAppName}"; ValueType: string
 Root: HKCU; Subkey: "Software\{#MyAppPublisher}\{#MyAppName}"; ValueType: string; ValueName: "AppDataPath"; ValueData: "{userappdata}\{#MyAppName}"; Flags: uninsdeletekey
 
 [Run]
-; Launch after installation. Also runs for silent installs, which is how
-; Dash's in-app updater restarts the app once the new version is in place.
-Filename: "{app}\{#MyAppExeName}"; Description: "Launch {#MyAppName} now"; Flags: nowait postinstall
+; Launch after installation. Interactive installs offer it as a checkbox.
+; Silent installs launch only when asked with /RELAUNCH=1, which is how
+; Dash's in-app updater restarts the app; package managers such as winget
+; run silently without it and must not have an app pop up mid-install.
+Filename: "{app}\{#MyAppExeName}"; Description: "Launch {#MyAppName} now"; Flags: nowait postinstall; Check: ShouldLaunchAfterInstall
 
 [UninstallRun]
 ; Kill the app before uninstalling (if running)
@@ -125,6 +127,12 @@ Filename: "taskkill"; Parameters: "/F /IM {#MyAppExeName}"; Flags: runhidden; Ru
 [Code]
 var
   AppDataPath: String;
+
+// Silent installs stay silent unless the caller asks for a relaunch.
+function ShouldLaunchAfterInstall(): Boolean;
+begin
+  Result := (not WizardSilent) or (ExpandConstant('{param:RELAUNCH|0}') = '1');
+end;
 
 // Initialize paths
 function InitializeSetup(): Boolean;
