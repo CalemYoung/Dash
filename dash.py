@@ -47,7 +47,9 @@ try:
     from src.launcher_gui import MainWindow
     from src.launcher_hotkey import HotkeyListener
     from src.settings import Settings
+    from src.single_instance import SHOW_MESSAGE, SingleInstanceServer, notify_running_instance
     from src.version import current_version
+    from PyQt6.QtCore import QTimer
     from PyQt6.QtWidgets import QApplication
 except Exception:
     _log_fatal_error()
@@ -99,10 +101,20 @@ if hasattr(sys, "_MEIPASS"):
 else:
     os.chdir(Path(__file__).parent)
 
+# Passed by the Windows startup entry the installer writes. Every other way of
+# starting Dash is a person clicking something, and they get the search bar.
+STARTUP_FLAG = "--startup"
+
 if __name__ == "__main__":
     try:
         app = QApplication(sys.argv)
         app.setQuitOnLastWindowClosed(False)
+        started_by_windows = STARTUP_FLAG in sys.argv[1:]
+
+        # Already running? Ask that copy to show itself and bow out, so a
+        # click on the icon never produces a second process and hotkey hook.
+        if notify_running_instance(SHOW_MESSAGE):
+            sys.exit(0)
 
         style_path = get_resource_path("style.qss")
         if style_path.exists():
@@ -123,6 +135,17 @@ if __name__ == "__main__":
         listener = HotkeyListener(hotkey=settings.general.hotkey)
         listener.triggered.connect(window.activate_launcher)
         window.set_hotkey_listener(listener)
+
+        # Later launches (Start Menu, desktop shortcut) land here as "show".
+        instance_server = SingleInstanceServer(
+            lambda message: window.activate_launcher() if message == SHOW_MESSAGE else None,
+            parent=app,
+        )
+
+        # Started by a person rather than by Windows at sign-in: show the
+        # search bar so the click visibly did something.
+        if not started_by_windows:
+            QTimer.singleShot(0, window.activate_launcher)
 
         sys.exit(app.exec())
     except Exception:

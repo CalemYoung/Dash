@@ -82,6 +82,7 @@ class SearchSettings:
     sort_results: str = DEFAULT_SETTINGS["search"]["sort_results"]
     show_descriptions: bool = DEFAULT_SETTINGS["search"]["show_descriptions"]
     show_run_counter: bool = DEFAULT_SETTINGS["search"]["show_run_counter"]
+    show_edit_button: bool = DEFAULT_SETTINGS["search"]["show_edit_button"]
     show_command_tree: bool = DEFAULT_SETTINGS["search"]["show_command_tree"]
 
 

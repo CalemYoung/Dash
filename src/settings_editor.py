@@ -528,6 +528,11 @@ class SettingsEditorPanel(QFrame):
                     self._check(self._settings.search.show_run_counter),
                 ),
                 (
+                    "Show edit button on results",
+                    "search.show_edit_button",
+                    self._check(self._settings.search.show_edit_button),
+                ),
+                (
                     "Show command tree",
                     "search.show_command_tree",
                     self._check(self._settings.search.show_command_tree),
@@ -624,6 +629,7 @@ class SettingsEditorPanel(QFrame):
                 sort_results=self._value("search.sort_results"),
                 show_descriptions=self._value("search.show_descriptions"),
                 show_run_counter=self._value("search.show_run_counter"),
+                show_edit_button=bool(self._value("search.show_edit_button")),
                 show_command_tree=self._value("search.show_command_tree"),
             ),
             shortcuts=ShortcutSettings(

@@ -32,6 +32,9 @@ sort_results = "popularity"
 show_descriptions = true
 # Counts are always recorded; this only controls whether the pill is shown.
 show_run_counter = false
+# Pencil button on each result for editing with the mouse. Ctrl+Enter edits
+# the selected result either way.
+show_edit_button = true
 # The command tree panel shows how each typed letter narrows the matches.
 # Off by default to keep the launcher to a single column; turn it on in Settings.
 show_command_tree = false

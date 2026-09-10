@@ -72,6 +72,11 @@ on it to run the scan, or run it again any time from Settings.
 Use the system tray menu to open settings or manage commands. Dash stores your
 configuration in `%APPDATA%\Dash`, so upgrades keep your settings and commands.
 
+Starting Dash from the Start Menu or a shortcut opens the search bar, and if
+Dash is already running it brings up the existing copy rather than a second
+one. Only the start-at-sign-in entry starts Dash silently in the tray; it
+passes `--startup` to do so.
+
 Dash checks GitHub for a new release once each time it starts and shows a
 single tray notification if there is one. Nothing is installed until you
 choose "Install and Restart", at which point the installer is downloaded,

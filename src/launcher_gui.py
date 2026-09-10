@@ -1428,7 +1428,7 @@ class MainWindow(QMainWindow):
                 command=result["name"],
                 description=description,
                 run_counter=run_counter,
-                editable=result.get("type") != "system",
+                editable=result.get("type") != "system" and self.settings.search.show_edit_button,
             )
             item.setSizeHint(result_widget.sizeHint())
             self.results_list_widget.setItemWidget(item, result_widget)
