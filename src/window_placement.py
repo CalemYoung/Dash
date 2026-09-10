@@ -32,15 +32,19 @@ def clamp_size_to_screen(width: int, height: int, area: QRect, margin: int = SCR
     )
 
 
-def move_within_screen(widget, size: QSize | None = None, anchor_center: QPoint | None = None):
+def move_within_screen(widget, size: QSize | None = None, anchor_center: QPoint | None = None, area: QRect | None = None):
     """Centre `widget` on `anchor_center`, then pull it fully back on screen.
 
     Pass `size` whenever the widget was just resized. Qt applies a resize
     lazily, so frameGeometry() straight after setFixedSize() still reports the
     old size - position it from that and a window that just grew is placed as
     though it were still small, leaving it overhanging the bottom right.
+
+    `area` is the work area to stay within; it defaults to the screen the
+    widget is currently on, so pass it when moving to a different screen.
     """
-    area = available_geometry_for(widget)
+    if area is None:
+        area = available_geometry_for(widget)
     if size is None:
         size = widget.frameGeometry().size()
 

@@ -577,8 +577,7 @@ class MainWindow(QMainWindow):
             self._clear_and_hide_results()
 
         self.adjustSize()
-        if self.settings.general.show_on_screen_with_mouse:
-            self._move_to_mouse_screen()
+        self._move_to_configured_screen()
         self.show()
         if was_visible:
             self.raise_()
@@ -622,21 +621,39 @@ class MainWindow(QMainWindow):
             self.activateWindow()
             self.search_input_widget.setFocus()
 
-    def _move_to_mouse_screen(self):
-        cursor_pos = QCursor.pos()
-        screen = QApplication.screenAt(cursor_pos)
+    def _target_screen(self) -> QScreen | None:
+        """The display the launcher should open on, per the launcher_screen setting.
+
+        "mouse": the display under the pointer. "primary": the primary display.
+        Anything else is a display name as shown in Settings; if that display
+        is not connected right now, fall back to the primary one rather than
+        wherever the window happened to be last.
+        """
+        choice = str(self.settings.general.launcher_screen or "mouse").strip()
+        primary = QApplication.primaryScreen()
+        if choice == "mouse":
+            return QApplication.screenAt(QCursor.pos()) or primary
+        if choice == "primary":
+            return primary
+        screens = QApplication.screens()
+        for screen in screens:
+            if screen.name().strip() == choice:
+                return screen
+        if choice.startswith("display:"):  # a display that reported no name, stored by position
+            try:
+                index = int(choice.split(":", 1)[1]) - 1
+                if 0 <= index < len(screens):
+                    return screens[index]
+            except ValueError:
+                pass
+        return primary
+
+    def _move_to_configured_screen(self):
+        screen = self._target_screen()
         if screen is None:
-            screen = QApplication.primaryScreen()
-
-        screen = cast(QScreen, screen)  # silence the type checker
-
-        screen_geom = screen.availableGeometry() if hasattr(screen, "availableGeometry") else screen.geometry()
-        win_geom = self.frameGeometry()
-
-        x = screen_geom.center().x() - win_geom.width() // 2
-        y = screen_geom.center().y() - win_geom.height() // 2
-
-        self.move(x, y)
+            return
+        area = screen.availableGeometry()
+        move_within_screen(self, self.frameGeometry().size(), area.center(), area)
 
     def showEvent(self, event):
         super().showEvent(event)

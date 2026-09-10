@@ -1,6 +1,9 @@
 [general]
 hotkey = "Alt+F"
-show_on_screen_with_mouse = false
+# Which display the launcher opens on: "mouse" (the one the pointer is on),
+# "primary", or a display's name as listed in Settings. It is always centred
+# on that display, so it never gets left behind on the screen it last used.
+launcher_screen = "mouse"
 # Look for a new release once each time Dash starts and show a single tray
 # notification if there is one. Nothing is installed until you choose to.
 check_updates_on_startup = true

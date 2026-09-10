@@ -49,7 +49,7 @@ def _from_section(cls, data: dict):
 @dataclass
 class GeneralSettings:
     hotkey: str = DEFAULT_SETTINGS["general"]["hotkey"]
-    show_on_screen_with_mouse: bool = DEFAULT_SETTINGS["general"]["show_on_screen_with_mouse"]
+    launcher_screen: str = DEFAULT_SETTINGS["general"]["launcher_screen"]
     check_updates_on_startup: bool = DEFAULT_SETTINGS["general"]["check_updates_on_startup"]
 
 
@@ -168,6 +168,13 @@ class Settings:
         )
         if settings.search.sort_results not in SORT_RESULTS_OPTIONS:
             settings.search.sort_results = SORT_RESULTS_OPTIONS[0]
+
+        # Older files had a yes/no "follow the mouse" flag instead of a screen choice.
+        general = data.get("general", {})
+        if "launcher_screen" not in general and "show_on_screen_with_mouse" in general:
+            settings.general.launcher_screen = "mouse" if general["show_on_screen_with_mouse"] else "primary"
+        if not str(settings.general.launcher_screen).strip():
+            settings.general.launcher_screen = "mouse"
         return settings.normalize_resource_paths()
 
     @classmethod

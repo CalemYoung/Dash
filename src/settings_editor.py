@@ -5,6 +5,7 @@ from typing import Any, cast
 from PyQt6.QtCore import QEvent, QFileInfo, QPointF, QRect, QSize, Qt, pyqtSignal
 from PyQt6.QtGui import QColor, QIcon, QKeySequence, QLinearGradient, QPainter, QPen, QShortcut
 from PyQt6.QtWidgets import (
+    QApplication,
     QCheckBox,
     QComboBox,
     QDialog,
@@ -444,6 +445,30 @@ class SettingsEditorPanel(QFrame):
     def _color(value):
         return ColorButton(value)
 
+    def _screen_options(self):
+        """Choices for where the launcher opens: mouse, primary, then each display.
+
+        A display is stored by name. If the stored one is not connected right
+        now it is still listed, marked as such, so the choice survives a
+        laptop being undocked.
+        """
+        options = [("mouse", "The display the mouse is on"), ("primary", "Primary display")]
+        app = QApplication.instance()
+        screens = list(app.screens()) if app is not None else []
+        primary = app.primaryScreen() if app is not None else None
+        for index, screen in enumerate(screens, start=1):
+            size = screen.geometry()
+            model = screen.model().strip() or screen.name().strip() or f"Display {index}"
+            label = f"Display {index}: {model} ({size.width()}×{size.height()})"
+            if screen is primary:
+                label += ", primary"
+            # Stored by name; a display that reports no name is stored by position.
+            options.append((screen.name().strip() or f"display:{index}", label))
+        current = str(self._settings.general.launcher_screen or "")
+        if current and current not in {stored for stored, _ in options}:
+            options.append((current, f"{current} (not connected)"))
+        return options
+
     @staticmethod
     def _choice(value, options):
         """Drop-down over (stored_value, label) pairs; unknown values fall back to the first."""
@@ -498,9 +523,9 @@ class SettingsEditorPanel(QFrame):
                     self._spin(self._settings.search.max_results, 1, 2_147_483_647),
                 ),
                 (
-                    "Open on screen with mouse",
-                    "general.show_on_screen_with_mouse",
-                    self._check(self._settings.general.show_on_screen_with_mouse),
+                    "Open on display",
+                    "general.launcher_screen",
+                    self._choice(self._settings.general.launcher_screen, self._screen_options()),
                 ),
                 (
                     "Check for updates at startup",
@@ -603,7 +628,7 @@ class SettingsEditorPanel(QFrame):
         return Settings(
             general=GeneralSettings(
                 hotkey=self._value("general.hotkey"),
-                show_on_screen_with_mouse=bool(self._value("general.show_on_screen_with_mouse")),
+                launcher_screen=str(self._value("general.launcher_screen") or "mouse"),
                 check_updates_on_startup=bool(self._value("general.check_updates_on_startup")),
             ),
             ui=UISettings(
