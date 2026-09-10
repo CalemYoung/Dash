@@ -6,7 +6,7 @@ from PyQt6.QtGui import QBrush, QIcon, QAction, QDesktopServices, QMouseEvent, Q
 from PyQt6.QtNetwork import QNetworkAccessManager, QNetworkReply, QNetworkRequest
 from .settings import Settings
 from .settings_editor import ExportCommandsDialog, ImportCommandsDialog, ProgramImportDialog, SettingsEditorPanel
-from .window_placement import available_geometry_for, clamp_size_to_screen, move_within_screen
+from .window_placement import available_geometry_for, clamp_size_to_screen, move_within_screen, pin_within_screen
 from .icon_manager import IconManager
 from .command_trie import TrieSnapshot
 from typing import cast
@@ -936,8 +936,7 @@ class MainWindow(QMainWindow):
             max(720, self.settings.ui.editor_height),
             available_geometry_for(self),
         )
-        self.setFixedSize(editor_size)
-        move_within_screen(self, editor_size, previous_center)
+        pin_within_screen(self, editor_size, previous_center)
         panel.setFocus()
 
     def _apply_settings(self, settings):
@@ -1325,8 +1324,7 @@ class MainWindow(QMainWindow):
             available_geometry_for(self),
         )
         if editor_size != self.size():
-            self.setFixedSize(editor_size)
-            move_within_screen(self, editor_size, self._editor_return_center)
+            pin_within_screen(self, editor_size, self._editor_return_center)
         if settle:
             QTimer.singleShot(0, lambda: self._fit_editor_panel(settle=False))
 
@@ -1336,22 +1334,18 @@ class MainWindow(QMainWindow):
         if panel is None:
             return
         self._editor_panel = None
+        # Pin back to the search-view size. The stack keeps the editor's large
+        # size hint, so releasing the constraint would let the window re-expand;
+        # the search view height is constant, so a fixed size is safe here.
+        # Painting is held across the page switch and the resize together.
         self.setUpdatesEnabled(False)
         try:
             self.view_stack.setCurrentWidget(self.central_widget)
             self.view_stack.removeWidget(panel)
+            pin_within_screen(self, self._search_view_size, getattr(self, "_editor_return_center", None))
         finally:
             self.setUpdatesEnabled(True)
         panel.deleteLater()
-        # Pin back to the search-view size. The stack keeps the editor's large
-        # size hint, so releasing the constraint would let the window re-expand;
-        # the search view height is constant, so a fixed size is safe here.
-        self.setFixedSize(self._search_view_size)
-        move_within_screen(
-            self,
-            self._search_view_size,
-            getattr(self, "_editor_return_center", None),
-        )
         if hasattr(self, "_editor_return_center"):
             del self._editor_return_center
         # Refresh results so any edits show immediately.

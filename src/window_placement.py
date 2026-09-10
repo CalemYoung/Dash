@@ -7,7 +7,7 @@ a laptop screen. All placement goes through here.
 """
 
 from PyQt6.QtCore import QPoint, QRect, QSize
-from PyQt6.QtWidgets import QApplication
+from PyQt6.QtWidgets import QApplication, QWIDGETSIZE_MAX
 
 # Breathing room between a window and the edge of the work area.
 SCREEN_MARGIN = 16
@@ -47,7 +47,12 @@ def move_within_screen(widget, size: QSize | None = None, anchor_center: QPoint 
         area = available_geometry_for(widget)
     if size is None:
         size = widget.frameGeometry().size()
+    widget.move(position_within_screen(size, anchor_center, area))
 
+
+def position_within_screen(size: QSize, anchor_center: QPoint | None, area: QRect) -> QPoint:
+    """Top-left corner that centres `size` on `anchor_center` and keeps it
+    fully inside `area`."""
     frame = QRect(QPoint(0, 0), size)
     frame.moveCenter(anchor_center if anchor_center is not None else area.center())
 
@@ -55,7 +60,26 @@ def move_within_screen(widget, size: QSize | None = None, anchor_center: QPoint 
     # with the top edge and overflows downwards, rather than the reverse.
     x = max(area.left(), min(frame.left(), area.left() + area.width() - size.width()))
     y = max(area.top(), min(frame.top(), area.top() + area.height() - size.height()))
-    widget.move(x, y)
+    return QPoint(x, y)
+
+
+def pin_within_screen(widget, size: QSize, anchor_center: QPoint | None = None, area: QRect | None = None):
+    """Give a visible, fixed-size window a new size and position in one step.
+
+    A resize followed by a move is two native window changes, and between
+    them the window can be drawn at the new size in the old place. Releasing
+    the fixed size, setting the full geometry once, then pinning the size
+    again keeps it to a single change.
+    """
+    if area is None:
+        area = available_geometry_for(widget)
+    position = position_within_screen(size, anchor_center, area)
+    target = QRect(position, size)
+    if widget.geometry() != target:
+        widget.setMinimumSize(0, 0)
+        widget.setMaximumSize(QWIDGETSIZE_MAX, QWIDGETSIZE_MAX)
+        widget.setGeometry(target)
+    widget.setFixedSize(size)
 
 
 def fit_within_screen(widget, anchor_center: QPoint | None = None, margin: int = SCREEN_MARGIN):
