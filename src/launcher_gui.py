@@ -1320,12 +1320,15 @@ class MainWindow(QMainWindow):
         self._editor_panel = panel
         self.view_stack.addWidget(panel)
         self.view_stack.setCurrentWidget(panel)
-        # Pin the window size: the alias grid resizes with the window, so an
-        # unconstrained window would grow without bound.
+        # Pin the window size, but never below what the panel needs: the
+        # editor has grown fields over time, and a fixed height that is too
+        # short squeezes the alias box until its chips are clipped.
         self._pre_editor_size = self.size()
+        width = self.settings.ui.program_width
+        needed_height = panel.layout().totalHeightForWidth(width) if panel.layout().hasHeightForWidth() else panel.sizeHint().height()
         editor_size = clamp_size_to_screen(
-            self.settings.ui.program_width,
-            self.settings.ui.editor_height,
+            width,
+            max(self.settings.ui.editor_height, needed_height),
             available_geometry_for(self),
         )
         self.setFixedSize(editor_size)

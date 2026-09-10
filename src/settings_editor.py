@@ -307,10 +307,8 @@ class CommandEditDialog(DragToMoveMixin, QDialog):
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
         self.result_command: dict | None = None
 
-        # Pinned, not merely resized: the alias grid sizes itself from its
-        # container, so an unconstrained dialog would grow without bound.
         settings = icon_manager.settings
-        self.setFixedSize(max(520, settings.ui.program_width), settings.ui.editor_height)
+        width = max(520, settings.ui.program_width)
 
         self.panel = CommandEditorPanel(command, icon_manager, command_manager, self, standalone=True, title=title)
         self.panel.saved.connect(self._on_saved)
@@ -319,6 +317,13 @@ class CommandEditDialog(DragToMoveMixin, QDialog):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.addWidget(self.panel)
+
+        # Pinned (the alias chips flow to the width), but never shorter than
+        # the panel needs, so nothing gets clipped. The screen clamp in
+        # showEvent still shrinks it on a small display.
+        panel_layout = self.panel.layout()
+        needed = panel_layout.totalHeightForWidth(width) if panel_layout.hasHeightForWidth() else self.panel.sizeHint().height()
+        self.setFixedSize(width, max(settings.ui.editor_height, needed))
 
     def showEvent(self, event):
         super().showEvent(event)

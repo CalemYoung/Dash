@@ -162,6 +162,15 @@ ResultRow[selected="true"] #ResultRunCounterLabel {
     padding: 2px 0px;
 }
 
+#AliasDelete {
+    color: #8b929e;
+    font-size: 12px;
+}
+
+#Alias:hover #AliasDelete {
+    color: #e7e9ee;
+}
+
 #Alias:hover {
     background-color: #343a46;
 }

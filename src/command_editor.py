@@ -1,5 +1,4 @@
 import bisect
-import math
 from enum import IntEnum
 from pathlib import Path
 
@@ -9,13 +8,13 @@ from PyQt6.QtWidgets import (
     QFrame,
     QLineEdit,
     QPushButton,
-    QGridLayout,
+    QLayout,
     QVBoxLayout,
     QHBoxLayout,
     QLabel,
     QFileIconProvider,
 )
-from PyQt6.QtCore import Qt, QSize, QUrl, QTimer, QFileInfo, pyqtSignal
+from PyQt6.QtCore import Qt, QPoint, QRect, QSize, QUrl, QTimer, QFileInfo, pyqtSignal
 from PyQt6.QtGui import QIcon, QColor, QPixmap, QDesktopServices
 from PyQt6.QtNetwork import QNetworkAccessManager, QNetworkRequest, QNetworkReply
 
@@ -43,7 +42,73 @@ class CommandType(IntEnum):
         return "url" if self is CommandType.URL else "file"
 
 
+class FlowLayout(QLayout):
+    """Lays items out left to right, wrapping to a new line when the width
+    runs out, and reports the height that needs. The standard Qt flow layout,
+    used for alias chips so they wrap like words rather than being placed on
+    a hand-computed grid."""
+
+    def __init__(self, parent=None, spacing=8):
+        super().__init__(parent)
+        self._items = []
+        self._gap = spacing
+        self.setContentsMargins(0, 0, 0, 0)
+
+    def addItem(self, item):
+        self._items.append(item)
+
+    def count(self):
+        return len(self._items)
+
+    def itemAt(self, index):
+        return self._items[index] if 0 <= index < len(self._items) else None
+
+    def takeAt(self, index):
+        return self._items.pop(index) if 0 <= index < len(self._items) else None
+
+    def expandingDirections(self):
+        return Qt.Orientation(0)
+
+    def hasHeightForWidth(self):
+        return True
+
+    def heightForWidth(self, width):
+        return self._arrange(QRect(0, 0, width, 0), test_only=True)
+
+    def setGeometry(self, rect):
+        super().setGeometry(rect)
+        self._arrange(rect, test_only=False)
+
+    def sizeHint(self):
+        return self.minimumSize()
+
+    def minimumSize(self):
+        size = QSize()
+        for item in self._items:
+            size = size.expandedTo(item.minimumSize())
+        margins = self.contentsMargins()
+        return size + QSize(margins.left() + margins.right(), margins.top() + margins.bottom())
+
+    def _arrange(self, rect, test_only):
+        margins = self.contentsMargins()
+        area = rect.adjusted(margins.left(), margins.top(), -margins.right(), -margins.bottom())
+        x, y, line_height = area.x(), area.y(), 0
+        for item in self._items:
+            hint = item.sizeHint()
+            if x + hint.width() > area.right() + 1 and line_height > 0:
+                x = area.x()
+                y += line_height + self._gap
+                line_height = 0
+            if not test_only:
+                item.setGeometry(QRect(QPoint(x, y), hint))
+            x += hint.width() + self._gap
+            line_height = max(line_height, hint.height())
+        return y + line_height - rect.y() + margins.bottom()
+
+
 class Alias(QFrame):
+    """One alias chip: its text and a \u00d7 that removes it."""
+
     def __init__(self, text, alias_box):
         super().__init__()
         self.alias_text = text
@@ -51,24 +116,25 @@ class Alias(QFrame):
         self.setObjectName("Alias")
 
         layout = QHBoxLayout(self)
-        layout.setContentsMargins(6, 2, 6, 2)
+        layout.setContentsMargins(8, 3, 6, 3)
+        layout.setSpacing(8)
         self.text_label = QLabel(text)
         self.delete_label = QLabel("\u2715")
+        self.delete_label.setObjectName("AliasDelete")
+        self.delete_label.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.delete_label.setToolTip(f"Remove alias '{text}'")
         layout.addWidget(self.text_label)
-        layout.addStretch()
         layout.addWidget(self.delete_label)
 
     def mousePressEvent(self, event):
-        self.delete_alias()
-
-    def delete_alias(self):
-        self.alias_box.aliases.remove(self)
-        self.alias_box.grid_layout.removeWidget(self)
-        self.alias_box.update_grid()
-        self.alias_box.aliasesChanged.emit()
+        # Only the \u00d7 removes the alias; clicking the text should not lose it.
+        if self.delete_label.geometry().contains(event.position().toPoint()):
+            self.alias_box.remove_alias(self)
+        else:
+            super().mousePressEvent(event)
 
     def __lt__(self, other):
-        return self.alias_text < other.alias_text
+        return self.alias_text.casefold() < other.alias_text.casefold()
 
 
 class AliasEnterBox(QLineEdit):
@@ -88,29 +154,35 @@ class AliasEnterBox(QLineEdit):
 
 
 class AliasBox(QFrame):
+    """Alias chips that wrap like words, with the entry box on its own line
+    beneath them. The box grows to fit its chips and never clips them."""
+
     aliasesChanged = pyqtSignal()
+    MAX_ALIASES = 18
+    MAX_ALIAS_LENGTH = 32
 
     def __init__(self):
         super().__init__()
-        self.MAX_NUMBER_OF_COLUMNS = 24
-        self.width_per_column = 0
         self.aliases: list[Alias] = []
         self.keyword_validator = None
 
         self.grid_container = QFrame()
         self.grid_container.setObjectName("AliasGridContainer")
-        self.grid_layout = QGridLayout(self.grid_container)
-        self.grid_layout.setAlignment(Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignLeft)
-        self.grid_layout.setContentsMargins(10, 10, 10, 10)
-        self.grid_layout.setHorizontalSpacing(8)
-        self.grid_layout.setVerticalSpacing(8)
+        container_layout = QVBoxLayout(self.grid_container)
+        container_layout.setContentsMargins(10, 10, 10, 10)
+        container_layout.setSpacing(8)
+
+        self.chip_layout = FlowLayout(spacing=8)
+        container_layout.addLayout(self.chip_layout)
 
         self.enter_box = AliasEnterBox()
         self.enter_box.setObjectName("AliasEnterBox")
         self.enter_box.returnPressed.connect(self.on_enter_pressed)
+        self.enter_box.textEdited.connect(lambda _text: self._clear_error())
         self.enter_box.setPlaceholderText("Add alias, press \u21b5")
         self.enter_box.setMinimumWidth(100)
         self.enter_box.setTextMargins(6, 0, 0, 0)  # line up with the chip text
+        container_layout.addWidget(self.enter_box)
 
         self.error_label = QLabel()
         self.error_label.setObjectName("validationMessage")
@@ -118,6 +190,7 @@ class AliasBox(QFrame):
 
         outer_layout = QVBoxLayout(self)
         outer_layout.setContentsMargins(0, 0, 0, 0)
+        outer_layout.setSpacing(4)
         outer_layout.addWidget(self.grid_container)
         outer_layout.addWidget(self.error_label)
 
@@ -131,63 +204,59 @@ class AliasBox(QFrame):
     def _clear_error(self):
         self.error_label.hide()
 
+    def alias_texts(self) -> list[str]:
+        return [alias.alias_text for alias in self.aliases]
+
     def set_aliases(self, aliases):
         """Replace the current chips with the given alias strings."""
         for alias in list(self.aliases):
-            self.grid_layout.removeWidget(alias)
+            self.chip_layout.removeWidget(alias)
             alias.deleteLater()
         self.aliases = []
         for text in aliases:
             bisect.insort(self.aliases, Alias(text, self))
-        self.update_grid()
+        self._relayout_chips()
         self.aliasesChanged.emit()
 
-    def resizeEvent(self, event):
-        super().resizeEvent(event)
-        self.width_per_column = self.width() // self.MAX_NUMBER_OF_COLUMNS
-        for i in range(self.MAX_NUMBER_OF_COLUMNS):
-            self.grid_layout.setColumnMinimumWidth(i, self.width_per_column)
-        self.update_grid()
+    def remove_alias(self, alias: Alias):
+        if alias not in self.aliases:
+            return
+        self.aliases.remove(alias)
+        self.chip_layout.removeWidget(alias)
+        alias.deleteLater()
+        self._relayout_chips()
+        self._clear_error()
+        self.aliasesChanged.emit()
 
     def on_enter_pressed(self):
         text = self.enter_box.text().strip()
-        if len(text) > 32:
-            self._show_error("Aliases can be at most 32 characters.")
-        elif len(self.aliases) >= 18:
-            self._show_error("A command can have at most 18 aliases.")
-        elif text in [alias.alias_text for alias in self.aliases] or text == "":
-            self._show_error("Enter an alias that is not already listed.")
+        if not text:
+            self._show_error("Type an alias first.")
+        elif len(text) > self.MAX_ALIAS_LENGTH:
+            self._show_error(f"Aliases can be at most {self.MAX_ALIAS_LENGTH} characters.")
+        elif len(self.aliases) >= self.MAX_ALIASES:
+            self._show_error(f"A command can have at most {self.MAX_ALIASES} aliases.")
+        elif text.casefold() in {alias.casefold() for alias in self.alias_texts()}:
+            self._show_error(f"'{text}' is already one of this command's aliases.")
         elif self.keyword_validator and (error := self.keyword_validator(text)):
             self._show_error(error)
         else:
             self._clear_error()
-            self.enter_box.setText("")
-            alias = Alias(text, self)
-            bisect.insort(self.aliases, alias)
-            self.update_grid()
+            self.enter_box.clear()
+            bisect.insort(self.aliases, Alias(text, self))
+            self._relayout_chips()
             self.aliasesChanged.emit()
 
-    def update_grid(self):
-        current_column = 0
-        current_row = 0
-
-        self.grid_layout.removeWidget(self.enter_box)
-
+    def _relayout_chips(self):
+        """Re-add chips in sorted order so the flow reads alphabetically."""
+        while self.chip_layout.count():
+            self.chip_layout.takeAt(0)
         for alias in self.aliases:
-            columns_required = math.ceil((alias.sizeHint().width()) / max(self.width_per_column, 1)) + 2
-            if current_column + columns_required > self.MAX_NUMBER_OF_COLUMNS:
-                current_row += 1
-                current_column = 0
-
-            self.grid_layout.addWidget(alias, current_row, current_column, 1, columns_required)
-            current_column += columns_required
-
-        if current_column > 0 or not self.aliases:
-            current_row += 1
-
-        self.grid_layout.setRowMinimumHeight(0, self.enter_box.sizeHint().height() if not self.aliases else 0)
-
-        self.grid_layout.addWidget(self.enter_box, current_row, 0, 1, self.MAX_NUMBER_OF_COLUMNS)
+            self.chip_layout.addWidget(alias)
+            alias.show()
+        self.chip_layout.invalidate()
+        self.grid_container.updateGeometry()
+        self.updateGeometry()
 
 
 class CommandTypeSelector(QFrame):
@@ -818,13 +887,17 @@ class CommandEditorPanel(QFrame):
         self.closed.emit()
 
     def _validate_new_alias(self, alias: str) -> str | None:
+        """Check only the alias being added, against the name, the existing
+        aliases and other commands. Problems among aliases that are already
+        there are reported at Save, not blamed on whatever is typed next."""
         entry = self._collect() or {"name": ""}
-        entry["aliases"] = [a.alias_text for a in self.alias_box.aliases]
-        entry["aliases"].append(alias)
-        error = self.cmd_manager.validate_command(entry, self._original_name, validate_target=False)
-        if error == "Enter a command name.":
+        name = str(entry.get("name", "")).strip()
+        if not name:
             return "Set the command name before adding aliases."
-        return error
+        if alias.casefold() == name.casefold():
+            return "That is already the command's name."
+        entry["aliases"] = [alias]
+        return self.cmd_manager.validate_command(entry, self._original_name, validate_target=False)
 
     def _show_validation_error(self, message):
         self.validation_message.setText(message)
