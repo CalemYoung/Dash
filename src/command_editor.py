@@ -15,10 +15,11 @@ from PyQt6.QtWidgets import (
     QFileIconProvider,
 )
 from PyQt6.QtCore import Qt, QPoint, QRect, QSize, QUrl, QTimer, QFileInfo, pyqtSignal
-from PyQt6.QtGui import QIcon, QColor, QPixmap, QDesktopServices
+from PyQt6.QtGui import QIcon, QColor, QPixmap, QDesktopServices, QShortcut
 from PyQt6.QtNetwork import QNetworkAccessManager, QNetworkRequest, QNetworkReply
 
 from src.browsers import DEFAULT_BROWSER, installed_browsers
+from src.keys import format_shortcut, key_sequences
 from src.icon_browser import IconStudio, glyph_pixmap, OutlineIcon, recipe_from_command, recipe_to_fields, render_recipe
 
 
@@ -342,7 +343,7 @@ class CommandActionEditor(QFrame):
         self.browser_label.setObjectName("fieldLabel")
         self.browser_combo = QComboBox()
         self.browser_combo.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
-        self.browser_combo.addItem("Browser from Settings", "")
+        self.browser_combo.addItem("Use Global Setting", "")
         for browser in installed_browsers():
             self.browser_combo.addItem(browser.name, browser.key)
         self.browser_combo.currentIndexChanged.connect(lambda _index: self.browserChanged.emit())
@@ -733,6 +734,17 @@ class CommandEditorPanel(QFrame):
         layout.addStretch(1)
         layout.addLayout(bottom_row)
 
+        # Keyboard: Esc leaves without saving; the same key that opens the
+        # editor saves it. Both are spelled out, since that key is configurable.
+        save_key = icon_manager.settings.shortcuts.edit_selected_command
+        self.save_shortcut = QShortcut(self)
+        self.save_shortcut.setKeys(key_sequences(save_key))
+        self.save_shortcut.setContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
+        self.save_shortcut.activated.connect(self._save_and_close)
+        self.keyboard_hint = QLabel(f"Esc: close without saving   |   {format_shortcut(save_key)}: save")
+        self.keyboard_hint.setObjectName("footerHint")
+        layout.addWidget(self.keyboard_hint, 0, Qt.AlignmentFlag.AlignRight)
+
         self._populate(self._command)
 
         self.command_name_edit_box.textChanged.connect(self._update_dirty_state)
@@ -833,22 +845,11 @@ class CommandEditorPanel(QFrame):
         self._update_dirty_state()
 
     def keyPressEvent(self, event):
+        # Esc closes without saving, as the hint beneath the buttons says.
         if event.key() == Qt.Key.Key_Escape:
-            self._leave()
+            self._cancel_and_close()
         else:
             super().keyPressEvent(event)
-
-    def _leave(self):
-        """Escape: keep valid edits rather than dropping them on the floor.
-
-        A clean editor just closes. A dirty one saves if the command validates;
-        if it does not, the error is shown and the editor stays open so nothing
-        is lost. The Cancel button remains the explicit way to discard.
-        """
-        if not self._is_dirty():
-            self.closed.emit()
-            return
-        self._save_and_close()
 
     def _collect(self) -> dict | None:
         name = self.command_name_edit_box.text().strip()

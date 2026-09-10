@@ -13,6 +13,7 @@ from typing import cast
 from .calculator import eval_expression
 from .icon_browser import glyph_pixmap, OutlineIcon
 from .version import current_version, is_newer_version
+from .keys import format_shortcut, key_sequences
 from .updater import ReleaseInfo, UpdateDownloader, is_installed_build, launch_installer, parse_release
 import os
 import sys
@@ -63,23 +64,7 @@ class ProgramDiscoveryThread(QThread):
                 pythoncom_module.CoUninitialize()
 
 
-def _key_sequences(shortcut: str) -> list[QKeySequence]:
-    """Key sequences for a shortcut string, accepting both Enter keys.
-
-    Qt reports the main Return key and the numeric keypad Enter as different
-    keys, so "Ctrl+Return" alone would never match keypad Enter and the line
-    edit would run the command instead. A shortcut written with either name
-    is registered for both.
-    """
-    text = shortcut.strip()
-    variants = [text]
-    lowered = text.lower()
-    if lowered.endswith("return"):
-        variants.append(text[: -len("return")] + "Enter")
-    elif lowered.endswith("enter"):
-        variants.append(text[: -len("enter")] + "Return")
-    sequences = [QKeySequence(variant) for variant in variants]
-    return [sequence for sequence in sequences if not sequence.isEmpty()]
+_key_sequences = key_sequences
 
 
 def _text_style(color_value: str, point_size: int | None = None) -> str:
@@ -152,7 +137,7 @@ class SearchTreeWidget(QWidget):
         muted = QColor("#7d8490")
         line = QColor("#464d59")
         error = QColor("#ff776d")
-        terminal = QColor("#e3b341")
+        terminal = QColor("#3fb950")  # green: what was typed is exactly a command
 
         header_font = painter.font()
         header_font.setPixelSize(max(9, round(10 * scale)))
@@ -229,7 +214,7 @@ class SearchTreeWidget(QWidget):
             active_fill = QColor("#57363a")
         elif snapshot.is_terminal:
             active_color = terminal
-            active_fill = QColor("#554922")
+            active_fill = QColor("#274a33")
         else:
             active_color = accent
             active_fill = QColor("#293c57")
@@ -337,18 +322,7 @@ class MainWindow(QMainWindow):
 
     @staticmethod
     def _format_shortcut(shortcut):
-        names = {
-            "alt": "Alt",
-            "ctrl": "Ctrl",
-            "control": "Ctrl",
-            "shift": "Shift",
-            "win": "Win",
-            "cmd": "Cmd",
-            "return": "Enter",
-            "enter": "Enter",
-            "space": "Space",
-        }
-        return " + ".join(names.get(part.strip().lower(), part.strip().upper()) for part in shortcut.split("+"))
+        return format_shortcut(shortcut)
 
     def _shortcut_hint_text(self):
         return "  |  ".join(
