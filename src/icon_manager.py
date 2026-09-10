@@ -451,7 +451,11 @@ class IconManager:
             except OSError:
                 pass
 
-        for icon_path in self.icon_store_dir.glob("auto_*.png"):
+        # Only extracted exe icons are pruned. Favicons (auto_web_*) are the
+        # download cache that URL commands draw from until a copy is saved as
+        # their own icon; no command references them by path, so pruning them
+        # here wiped the cache on every start.
+        for icon_path in self.icon_store_dir.glob("auto_exe_*.png"):
             try:
                 if icon_path.resolve() not in referenced:
                     icon_path.unlink()
@@ -654,9 +658,14 @@ class IconManager:
     def _check_favicon_cache(self, url):
         """The largest cached favicon for the site, or None."""
         try:
-            return self._favicon_memo[url]
+            found = self._favicon_memo[url]
         except KeyError:
             pass
+        else:
+            # A remembered file can have been deleted since (a cleared cache);
+            # a path to nothing would draw as an empty tile.
+            if found is None or os.path.exists(found):
+                return found
         found = self._scan_favicon_cache(url)
         self._favicon_memo[url] = found
         return found
