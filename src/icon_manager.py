@@ -87,6 +87,9 @@ class IconManager:
         self._favicon_lock = Lock()
         self._favicon_pending: set[str] = set()
         self._favicon_attempted: dict[str, float] = {}
+        # Result rows ask for their favicon on every keystroke; answer from
+        # memory rather than the disk. Cleared for a site when a download ends.
+        self._favicon_memo: dict[str, str | None] = {}
         self._start_download_worker()
 
     def get_icon_path(self, command_config):
@@ -268,15 +271,41 @@ class IconManager:
             return False
 
     def is_shared_default_icon(self, icon_path):
+        """True for one of Dash's own placeholder icons, wherever it lives.
+
+        Commands store the placeholder's absolute path, so the same file is
+        also matched from another install folder, an earlier version or a run
+        from source; otherwise it would count as a custom icon and a favicon
+        could never replace it. A user's own icon is never in the bundled
+        icons folder, so the user store is excluded from the name match.
+        """
         if not icon_path:
             return False
-        defaults = {
-            self.settings.paths.default_command_icon,
-            self.settings.paths.folder_icon,
-            self.settings.paths.file_icon,
-            self.settings.paths.url_command_icon,
-        }
-        return str(icon_path) in defaults
+        defaults = [
+            Path(self.settings.paths.default_command_icon),
+            Path(self.settings.paths.folder_icon),
+            Path(self.settings.paths.file_icon),
+            Path(self.settings.paths.url_command_icon),
+        ]
+        path = Path(str(icon_path))
+        if path in defaults:
+            return True
+        if path.name not in {default.name for default in defaults} or path.parent.name != "icons":
+            return False
+        try:
+            return path.resolve().parent != self.icon_store_dir.resolve()
+        except OSError:
+            return True
+
+    def _stored_icon_path(self, command):
+        """The command's stored icon path, or None when it is only a URL
+        placeholder that a favicon should replace."""
+        icon_path = command.get("icon")
+        location = str(command.get("location", "") or "")
+        is_url = command.get("type") == "url" or location.startswith(("http://", "https://"))
+        if is_url and self.is_shared_default_icon(icon_path):
+            return None
+        return icon_path
 
     def resolve_command_icon(self, command):
         """Resolve the best available icon for a command as a QIcon.
@@ -290,7 +319,7 @@ class IconManager:
         from PyQt6.QtCore import QFileInfo
         from PyQt6.QtWidgets import QFileIconProvider
 
-        icon_path = command.get("icon")
+        icon_path = self._stored_icon_path(command)
         location = str(command.get("location", "") or "")
         cmd_type = command.get("type", "")
         is_url = cmd_type == "url" or location.startswith(("http://", "https://"))
@@ -344,7 +373,7 @@ class IconManager:
         from PyQt6.QtCore import QFileInfo
         from PyQt6.QtGui import QIcon
 
-        icon_path = command.get("icon")
+        icon_path = self._stored_icon_path(command)
         location = str(command.get("location", "") or "")
         cmd_type = command.get("type", "")
         is_url = cmd_type == "url" or location.startswith(("http://", "https://"))
@@ -624,6 +653,15 @@ class IconManager:
 
     def _check_favicon_cache(self, url):
         """The largest cached favicon for the site, or None."""
+        try:
+            return self._favicon_memo[url]
+        except KeyError:
+            pass
+        found = self._scan_favicon_cache(url)
+        self._favicon_memo[url] = found
+        return found
+
+    def _scan_favicon_cache(self, url):
         from PyQt6.QtGui import QImage
 
         best = None
@@ -670,6 +708,7 @@ class IconManager:
                     with self._favicon_lock:
                         self._favicon_pending.discard(url)
                         self._favicon_attempted[url] = time.monotonic()
+                        self._favicon_memo.pop(url, None)  # next lookup sees the new file
                 self.download_queue.task_done()
 
         for _ in range(self.FAVICON_WORKERS):
