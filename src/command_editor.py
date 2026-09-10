@@ -392,29 +392,71 @@ class CommandActionEditor(QFrame):
             old_reply = self._reply
             self._reply = None
             old_reply.finished.disconnect()
+            old_reply.metaDataChanged.disconnect()
             old_reply.abort()
             old_reply.deleteLater()
+        # A GET that is abandoned as soon as the headers arrive. HEAD is
+        # refused by many app sites, and the body is never needed: the
+        # question is whether a server answers at all, and what it says.
         request = QNetworkRequest(url)
         request.setAttribute(
             QNetworkRequest.Attribute.RedirectPolicyAttribute,
             QNetworkRequest.RedirectPolicy.NoLessSafeRedirectPolicy,
         )
-        self._reply = self._network.head(request)
+        request.setRawHeader(b"User-Agent", self._BROWSER_USER_AGENT)
+        request.setRawHeader(b"Accept", b"text/html,application/xhtml+xml,*/*;q=0.8")
+        request.setTransferTimeout(8000)
+        self._reply_classified = False
+        self._reply = self._network.get(request)
         reply = self._reply
         if reply is not None:
+            reply.metaDataChanged.connect(self._on_reply_headers)
             reply.finished.connect(self._on_reply_finished)
+
+    _BROWSER_USER_AGENT = b"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0 Safari/537.36"
+
+    def _classify_status(self, status: int) -> tuple[str, str]:
+        """What an HTTP status means for "will this open in a browser".
+
+        A server that answers at all is reachable. Sign-in walls, bot
+        protection and blocked automation all come back as 401/403 for a
+        probe like this while opening fine for a person, so they are green
+        with an explanation. Only "no such page" and server failures are red.
+        """
+        if status in (404, 410):
+            return "bad", f"Page not found (HTTP {status})"
+        if status >= 500:
+            return "bad", f"The server reported an error (HTTP {status})"
+        if status in (401, 403):
+            return "ok", f"Reachable, but the site wants a signed-in browser (HTTP {status})"
+        if status == 429:
+            return "ok", "Reachable (the site is rate-limiting checks, HTTP 429)"
+        return "ok", f"Reachable (HTTP {status})"
+
+    def _on_reply_headers(self):
+        reply = self._reply
+        if reply is None or self._reply_classified:
+            return
+        status = reply.attribute(QNetworkRequest.Attribute.HttpStatusCodeAttribute)
+        if status is None or 300 <= int(status) < 400:
+            return  # a redirect Qt is about to follow; wait for the real answer
+        self._reply_classified = True
+        self._set_status(*self._classify_status(int(status)))
+        reply.abort()  # headers were all that was needed
 
     def _on_reply_finished(self):
         reply = self._reply
         if reply is None:
             return
         self._reply = None
-        status = reply.attribute(QNetworkRequest.Attribute.HttpStatusCodeAttribute)
-        ok = reply.error() == QNetworkReply.NetworkError.NoError and (status is None or status < 400)
-        if ok:
-            self._set_status("ok", f"Reachable ({status})" if status else "Reachable")
-        else:
-            self._set_status("bad", "Could not reach URL")
+        if not self._reply_classified:
+            status = reply.attribute(QNetworkRequest.Attribute.HttpStatusCodeAttribute)
+            if status is not None:
+                self._set_status(*self._classify_status(int(status)))
+            elif reply.error() == QNetworkReply.NetworkError.NoError:
+                self._set_status("ok", "Reachable")
+            else:
+                self._set_status("bad", f"Could not reach the site: {reply.errorString()}")
         reply.deleteLater()
 
     def _set_status(self, state, tooltip=""):
