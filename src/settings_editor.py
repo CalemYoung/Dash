@@ -778,14 +778,14 @@ def candidate_kind(candidate: dict) -> str:
 class ProgramImportDialog(DragToMoveMixin, QDialog):
     """Choose what the scan found before it becomes commands.
 
-    One tab per kind of thing (folders, apps and tools, websites), each with
+    One tab per kind of thing (apps and tools, folders, websites), each with
     its own filter and list, so a long scan is worked through a page at a
-    time instead of as one mixed list. Any entry can be opened in the command
-    editor (Edit Selected, or a double-click) to change its name, aliases,
-    description, target or icon before it is added.
+    time instead of as one mixed list. Double-clicking an entry opens it in
+    the command editor to change its name, aliases, description, target or
+    icon before it is added.
     """
 
-    KINDS = (("folder", "Folders"), ("app", "Apps and tools"), ("website", "Websites"))
+    KINDS = (("app", "Apps and tools"), ("folder", "Folders"), ("website", "Websites"))
 
     def __init__(
         self,
@@ -806,7 +806,10 @@ class ProgramImportDialog(DragToMoveMixin, QDialog):
 
         title = QLabel("Add Commands")
         title.setObjectName("dialogTitle")
-        subtitle = QLabel("What this PC has to offer. Tick what Dash should know about; nothing is added until you choose it.")
+        subtitle = QLabel(
+            "Tick what Dash should know about; nothing is added until you choose it. "
+            "Double-click an entry to change its name, aliases or icon first."
+        )
         subtitle.setObjectName("dialogSubtitle")
         subtitle.setWordWrap(True)
 
@@ -832,12 +835,6 @@ class ProgramImportDialog(DragToMoveMixin, QDialog):
         empty_message.setVisible(not selectable)
         self.tabs.setVisible(bool(selectable))
 
-        self.edit_button = QPushButton("Edit Selected...")
-        self.edit_button.setObjectName("programImportSelectButton")
-        self.edit_button.setEnabled(bool(selectable) and command_manager is not None)
-        self.edit_button.setToolTip("Open the highlighted entry in the editor before adding it")
-        self.edit_button.clicked.connect(self._edit_selected)
-
         select_all_button = QPushButton("Select all on this tab")
         select_none_button = QPushButton("Select none")
         for button in (select_all_button, select_none_button):
@@ -852,7 +849,6 @@ class ProgramImportDialog(DragToMoveMixin, QDialog):
         selection_row = QHBoxLayout()
         selection_row.addWidget(self.selected_label)
         selection_row.addStretch(1)
-        selection_row.addWidget(self.edit_button)
         selection_row.addWidget(select_all_button)
         selection_row.addWidget(select_none_button)
 
@@ -885,8 +881,9 @@ class ProgramImportDialog(DragToMoveMixin, QDialog):
         for candidate in group:
             self._add_item(list_widget, candidate)
         filter_box.textChanged.connect(lambda text, lw=list_widget: self._apply_filter(lw, text))
+        list_widget.setToolTip("Double-click to edit before adding")
         list_widget.itemChanged.connect(lambda _item: self._refresh_selection_count())
-        list_widget.itemDoubleClicked.connect(lambda _item: self._edit_selected())
+        list_widget.itemDoubleClicked.connect(self._edit_item)
         page_layout = QVBoxLayout(page)
         page_layout.setContentsMargins(0, 10, 0, 0)
         page_layout.setSpacing(8)
@@ -958,13 +955,10 @@ class ProgramImportDialog(DragToMoveMixin, QDialog):
             haystack = f"{candidate.get('name', '')} {candidate.get('location', '')} {' '.join(candidate.get('aliases', []))}".casefold()
             item.setHidden(bool(needle) and needle not in haystack)
 
-    def _edit_selected(self):
-        """Open the highlighted entry in the command editor and apply the result."""
-        list_widget = self._current_list()
+    def _edit_item(self, item: QListWidgetItem):
+        """Double-click: open the entry in the command editor and apply the result."""
+        list_widget = item.listWidget() if item is not None else None
         if list_widget is None or self._command_manager is None:
-            return
-        item = list_widget.currentItem()
-        if item is None:
             return
         candidate = item.data(Qt.ItemDataRole.UserRole)
         if candidate is None:
