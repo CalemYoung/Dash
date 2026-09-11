@@ -413,6 +413,7 @@ class MainWindow(QMainWindow):
         date_info_layout.addWidget(self.date_info_day_label)
         date_info_layout.addWidget(self.date_info_date_label)
         self.date_info_widget.setLayout(date_info_layout)
+        self.date_info_widget.setVisible(self.settings.ui.show_clock)
 
         search_container_layout = QHBoxLayout()
         search_container_layout.addWidget(self.search_input_widget, 1)
@@ -1008,6 +1009,7 @@ class MainWindow(QMainWindow):
         self._layout_margin = max(10, round(10 * self._layout_scale))
         self._layout_spacing = max(10, round(10 * self._layout_scale))
         self._apply_clock_text_style()
+        self.date_info_widget.setVisible(settings.ui.show_clock)
         self.footer_height = max(24, round(24 * self._layout_scale))
         self.footer_widget.setFixedHeight(self.footer_height)
         search_layout = self.search_container_widget.layout()

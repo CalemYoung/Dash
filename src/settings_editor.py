@@ -594,13 +594,15 @@ class SettingsEditorPanel(QFrame):
 
     def _results_group(self):
         search = self._settings.search
+        ui = self._settings.ui
         return self._group(
-            "Results",
+            "Display",
             [
-                ("Descriptions", "search.show_descriptions", self._check(search.show_descriptions)),
-                ("Run counts", "search.show_run_counter", self._check(search.show_run_counter)),
-                ("Edit buttons", "search.show_edit_button", self._check(search.show_edit_button)),
-                ("Command tree panel", "search.show_command_tree", self._check(search.show_command_tree)),
+                ("Show descriptions", "search.show_descriptions", self._check(search.show_descriptions)),
+                ("Show run counts", "search.show_run_counter", self._check(search.show_run_counter)),
+                ("Show edit buttons", "search.show_edit_button", self._check(search.show_edit_button)),
+                ("Show command tree panel", "search.show_command_tree", self._check(search.show_command_tree)),
+                ("Show clock", "ui.show_clock", self._check(ui.show_clock)),
             ],
         )
 
@@ -708,6 +710,7 @@ class SettingsEditorPanel(QFrame):
                 result_text_color=self._value("ui.result_text_color"),
                 description_font_size=self._value("ui.description_font_size"),
                 description_text_color=self._value("ui.description_text_color"),
+                show_clock=self._value("ui.show_clock"),
                 clock_font_size=self._value("ui.clock_font_size"),
                 clock_day_text_color=self._value("ui.clock_day_text_color"),
                 clock_date_text_color=self._value("ui.clock_date_text_color"),

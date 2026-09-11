@@ -24,6 +24,7 @@ result_font_size = 14
 result_text_color = "#e7e9ee"
 description_font_size = 10
 description_text_color = "#8f96a3"
+show_clock = true
 clock_font_size = 10
 clock_day_text_color = "#f3f4f7"
 clock_date_text_color = "#9da4b0"

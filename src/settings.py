@@ -67,6 +67,7 @@ class UISettings:
     result_text_color: str = DEFAULT_SETTINGS["ui"]["result_text_color"]
     description_font_size: int = DEFAULT_SETTINGS["ui"]["description_font_size"]
     description_text_color: str = DEFAULT_SETTINGS["ui"]["description_text_color"]
+    show_clock: bool = DEFAULT_SETTINGS["ui"]["show_clock"]
     clock_font_size: int = DEFAULT_SETTINGS["ui"]["clock_font_size"]
     clock_day_text_color: str = DEFAULT_SETTINGS["ui"]["clock_day_text_color"]
     clock_date_text_color: str = DEFAULT_SETTINGS["ui"]["clock_date_text_color"]
