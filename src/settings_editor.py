@@ -1,3 +1,4 @@
+import os
 from dataclasses import asdict
 from pathlib import Path
 from typing import Any, cast
@@ -758,6 +759,19 @@ class SettingsEditorPanel(QFrame):
         self.closed.emit()
 
 
+def candidate_kind(candidate: dict) -> str:
+    """'website', 'folder' or 'app', from what the candidate points at."""
+    location = str(candidate.get("location", ""))
+    if candidate.get("type") == "url" or location.startswith(("http://", "https://")):
+        return "website"
+    try:
+        if os.path.isdir(location):
+            return "folder"
+    except OSError:
+        pass
+    return "app"
+
+
 class ProgramImportDialog(DragToMoveMixin, QDialog):
     """Choose discovered programs before adding them as Dash commands.
 
@@ -791,18 +805,17 @@ class ProgramImportDialog(DragToMoveMixin, QDialog):
         self.program_list.setIconSize(QSize(28, 28))
 
         selectable_candidates = filter_new_program_commands(candidates, existing_locations)
-        suggested = [c for c in selectable_candidates if c.get("suggested")]
-        discovered = [c for c in selectable_candidates if not c.get("suggested")]
-        if suggested:
-            self._add_section_header("Suggested Windows folders and tools")
-        for candidate in suggested:
-            self._add_item(candidate)
-        if suggested and discovered:
-            self._add_section_header("Installed programs")
-        for candidate in discovered:
-            self._add_item(candidate)
+        # Three kinds of thing, each under its own heading so they can be
+        # ticked through in turn; Windows' own suggestions lead each group.
+        for heading, kind in (("Folders", "folder"), ("Apps and tools", "app"), ("Websites", "website")):
+            group = [c for c in selectable_candidates if candidate_kind(c) == kind]
+            group.sort(key=lambda c: not c.get("suggested"))
+            if group:
+                self._add_section_header(heading)
+            for candidate in group:
+                self._add_item(candidate)
 
-        empty_message = QLabel("No new installed programs were found." if not selectable_candidates else "")
+        empty_message = QLabel("Nothing new was found." if not selectable_candidates else "")
         empty_message.setObjectName("dialogSubtitle")
         empty_message.setVisible(not selectable_candidates)
 

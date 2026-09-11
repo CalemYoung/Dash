@@ -588,6 +588,16 @@ class CommandManager:
         """Return normalized locations of user commands already stored on disk."""
         return self._command_locations(self._read_raw_commands())
 
+    def existing_command_urls(self) -> set[str]:
+        """Normalised URLs of the website commands already stored on disk."""
+        from .personal_places import url_key
+
+        return {
+            url_key(str(command.get("location", "")))
+            for command in self._read_raw_commands()
+            if str(command.get("location", "")).startswith(("http://", "https://"))
+        }
+
     def has_user_commands(self) -> bool:
         """Whether the user has added any commands of their own (system commands excluded)."""
         return bool(self._read_raw_commands())

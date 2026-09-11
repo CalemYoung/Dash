@@ -55,8 +55,13 @@ class ProgramDiscoveryThread(QThread):
                 pythoncom_module.CoInitialize()
 
             from .installed_programs import discover_recent_program_commands
+            from .personal_places import discover_bookmark_bar, discover_quick_access_folders
 
             self.candidates = discover_recent_program_commands(days=365)
+            # The places the user already keeps. Each is best effort and
+            # returns nothing rather than failing the scan.
+            self.candidates += discover_quick_access_folders()
+            self.candidates += discover_bookmark_bar()
         except Exception as error:
             self.error_message = str(error)
         finally:
@@ -1171,7 +1176,7 @@ class MainWindow(QMainWindow):
 
         progress = QProgressDialog(self)
         progress.setWindowTitle("Auto-Populate Commands")
-        progress.setLabelText("Scanning installed programs...")
+        progress.setLabelText("Scanning installed programs, folders and favourites...")
         progress.setRange(0, 0)
         progress.setCancelButton(None)
         progress.setMinimumDuration(0)
@@ -1207,6 +1212,7 @@ class MainWindow(QMainWindow):
 
     def _show_program_import_dialog(self, candidates: list[dict]):
         from .installed_programs import discover_windows_suggestions, filter_new_program_commands, merge_program_candidates
+        from .personal_places import drop_known_websites
 
         # Suggestions lead: they are the handful of entries most people want,
         # and they would be lost partway down a list of installed programs.
@@ -1214,6 +1220,7 @@ class MainWindow(QMainWindow):
         candidates = merge_program_candidates(discover_windows_suggestions(), candidates)
         existing_locations = self.cmd_manager.existing_command_locations()
         candidates = filter_new_program_commands(candidates, existing_locations)
+        candidates = drop_known_websites(candidates, self.cmd_manager.existing_command_urls())
         dialog = ProgramImportDialog(candidates, existing_locations, self.icon_manager, self, command_manager=self.cmd_manager)
         if dialog.exec() != dialog.DialogCode.Accepted:
             return
