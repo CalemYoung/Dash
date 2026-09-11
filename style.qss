@@ -234,12 +234,44 @@ QDialog#LibraryPickerDialog {
     border-bottom: none;
 }
 
-#ProgramImportList::item:checked {
-    background: #293c57;
-}
-
 #ProgramImportList::item:hover {
     background: #26292f;
+}
+
+#ScanResultList {
+    background: #1e2025;
+    border: 1px solid #353942;
+    border-radius: 8px;
+    outline: none;
+}
+
+#ScanResultList::item {
+    border-bottom: 1px solid #2b2e35;
+    padding: 0px;
+}
+
+#ScanResultList::item:hover {
+    background: #26292f;
+}
+
+#ImportRow {
+    background: transparent;
+}
+
+#importRowName {
+    font-size: 13px;
+    color: #e7e9ee;
+}
+
+#importRowLocation,
+#importRowMeta {
+    font-size: 11px;
+    color: #8b929e;
+}
+
+#importRowError {
+    font-size: 11px;
+    color: #d9534f;
 }
 
 /* Tabs in the scan dialog: one page per kind of thing */

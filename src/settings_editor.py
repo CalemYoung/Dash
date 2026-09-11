@@ -22,6 +22,7 @@ from PyQt6.QtWidgets import (
     QLineEdit,
     QListWidget,
     QTabWidget,
+    QToolButton,
     QListWidgetItem,
     QPushButton,
     QSpinBox,
@@ -249,6 +250,8 @@ from .window_placement import fit_within_screen
 from .icon_browser import FRAMELESS_DIALOG, RECIPE_KEYS, DragToMoveMixin
 from .browsers import DEFAULT_BROWSER, installed_browsers
 from .command_editor import CommandEditorPanel
+from .icon_browser import OutlineIcon, glyph_pixmap
+from .widgets import ElidedLabel
 
 
 def browser_options(current: str | None, first_label: str = "Windows default") -> list[tuple[str, str]]:
@@ -806,10 +809,7 @@ class ProgramImportDialog(DragToMoveMixin, QDialog):
 
         title = QLabel("Add Commands")
         title.setObjectName("dialogTitle")
-        subtitle = QLabel(
-            "Tick what Dash should know about; nothing is added until you choose it. "
-            "Double-click an entry to change its name, aliases or icon first."
-        )
+        subtitle = QLabel("Tick what Dash should know about; nothing is added until you choose it.")
         subtitle.setObjectName("dialogSubtitle")
         subtitle.setWordWrap(True)
 
@@ -874,16 +874,14 @@ class ProgramImportDialog(DragToMoveMixin, QDialog):
         filter_box.setPlaceholderText(f"Filter {self._heading(kind).lower()}...")
         filter_box.setClearButtonEnabled(True)
         list_widget = QListWidget()
-        list_widget.setObjectName("ProgramImportList")
-        list_widget.setIconSize(QSize(28, 28))
+        list_widget.setObjectName("ScanResultList")
         # Long URLs would otherwise add a scrollbar under every page.
         list_widget.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         for candidate in group:
             self._add_item(list_widget, candidate)
         filter_box.textChanged.connect(lambda text, lw=list_widget: self._apply_filter(lw, text))
-        list_widget.setToolTip("Double-click to edit before adding")
-        list_widget.itemChanged.connect(lambda _item: self._refresh_selection_count())
-        list_widget.itemDoubleClicked.connect(self._edit_item)
+        list_widget.setSelectionMode(QListWidget.SelectionMode.NoSelection)
+        list_widget.itemClicked.connect(self._toggle_item)  # clicking the row ticks it
         page_layout = QVBoxLayout(page)
         page_layout.setContentsMargins(0, 10, 0, 0)
         page_layout.setSpacing(8)
@@ -916,26 +914,31 @@ class ProgramImportDialog(DragToMoveMixin, QDialog):
         return QIcon()
 
     def _add_item(self, list_widget: QListWidget, candidate: dict, row: int | None = None, checked: bool = False):
-        label = f"{candidate.get('name', '')}\n{candidate.get('location', '')}"
-        aliases = [str(alias) for alias in candidate.get("aliases", []) if str(alias).strip()]
-        if aliases:
-            label += "\nAliases: " + ", ".join(aliases)
-        error = candidate.get("_error")
-        if error:
-            label += f"\n⚠ {error}"
-        item = QListWidgetItem(label)
-        item.setIcon(self._resolve_icon(candidate))
+        """One row: checkbox, icon, name over an elided location, and a
+        pencil that opens the entry in the editor before it is added."""
+        item = QListWidgetItem()
         item.setData(Qt.ItemDataRole.UserRole, candidate)
-        item.setFlags(item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
-        item.setCheckState(Qt.CheckState.Checked if checked else Qt.CheckState.Unchecked)
-        if error:
-            item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsUserCheckable)
-            item.setForeground(QColor("#d9534f"))
+        widget = ImportRow(candidate, self._resolve_icon(candidate), checked, list_widget)
+        widget.check.toggled.connect(lambda _on: self._refresh_selection_count())
+        widget.edit_button.clicked.connect(lambda: self._edit_item(item))
+        item.setSizeHint(widget.sizeHint())
         if row is None:
             list_widget.addItem(item)
         else:
             list_widget.insertItem(row, item)
+        list_widget.setItemWidget(item, widget)
         return item
+
+    @staticmethod
+    def _row_widget(item: QListWidgetItem) -> "ImportRow | None":
+        list_widget = item.listWidget() if item is not None else None
+        widget = list_widget.itemWidget(item) if list_widget is not None else None
+        return widget if isinstance(widget, ImportRow) else None
+
+    def _toggle_item(self, item: QListWidgetItem):
+        widget = self._row_widget(item)
+        if widget is not None and widget.check.isEnabled():
+            widget.check.setChecked(not widget.check.isChecked())
 
     def _current_list(self) -> QListWidget | None:
         page = self.tabs.currentWidget()
@@ -956,7 +959,7 @@ class ProgramImportDialog(DragToMoveMixin, QDialog):
             item.setHidden(bool(needle) and needle not in haystack)
 
     def _edit_item(self, item: QListWidgetItem):
-        """Double-click: open the entry in the command editor and apply the result."""
+        """The pencil: open the entry in the command editor and apply the result."""
         list_widget = item.listWidget() if item is not None else None
         if list_widget is None or self._command_manager is None:
             return
@@ -974,8 +977,7 @@ class ProgramImportDialog(DragToMoveMixin, QDialog):
         row = list_widget.row(item)
         list_widget.takeItem(row)
         importable = not candidate["_error"] and not candidate["_conflict"]
-        new_item = self._add_item(list_widget, candidate, row=row, checked=importable)
-        list_widget.setCurrentItem(new_item)
+        self._add_item(list_widget, candidate, row=row, checked=importable)
         self._refresh_selection_count()
 
     def _set_visible_checked(self, state: Qt.CheckState):
@@ -986,8 +988,9 @@ class ProgramImportDialog(DragToMoveMixin, QDialog):
             return
         for index in range(list_widget.count()):
             item = list_widget.item(index)
-            if item is not None and not item.isHidden() and item.flags() & Qt.ItemFlag.ItemIsUserCheckable:
-                item.setCheckState(state)
+            widget = self._row_widget(item) if item is not None else None
+            if widget is not None and not item.isHidden() and widget.check.isEnabled():
+                widget.check.setChecked(state == Qt.CheckState.Checked)
         self._refresh_selection_count()
 
     def _refresh_selection_count(self):
@@ -1002,11 +1005,66 @@ class ProgramImportDialog(DragToMoveMixin, QDialog):
         for list_widget in self.lists.values():
             for index in range(list_widget.count()):
                 item = list_widget.item(index)
-                if item is None or item.data(Qt.ItemDataRole.UserRole) is None:
-                    continue
-                if item.checkState() == Qt.CheckState.Checked:
+                widget = self._row_widget(item) if item is not None else None
+                if widget is not None and widget.check.isChecked():
                     selected.append(item.data(Qt.ItemDataRole.UserRole))
         return selected
+
+
+class ImportRow(QWidget):
+    """A scan result: tick box, icon, name over its location, and a pencil.
+
+    The location is elided to the row, so a long web address never widens
+    the list or hides the pencil; the full text is its tooltip.
+    """
+
+    def __init__(self, candidate: dict, icon: QIcon, checked: bool, parent=None):
+        super().__init__(parent)
+        self.setObjectName("ImportRow")
+        error = candidate.get("_error")
+
+        self.check = QCheckBox()
+        self.check.setChecked(checked and not error)
+        self.check.setEnabled(not error)
+
+        icon_label = QLabel()
+        icon_label.setFixedSize(28, 28)
+        icon_label.setPixmap(icon.pixmap(QSize(28, 28)))
+
+        name = ElidedLabel(str(candidate.get("name", "")))
+        name.setObjectName("importRowName")
+        location = ElidedLabel(str(candidate.get("location", "")))
+        location.setObjectName("importRowLocation")
+        text = QVBoxLayout()
+        text.setContentsMargins(0, 0, 0, 0)
+        text.setSpacing(1)
+        text.addWidget(name)
+        text.addWidget(location)
+        aliases = [str(alias) for alias in candidate.get("aliases", []) if str(alias).strip()]
+        if aliases:
+            meta = ElidedLabel("Aliases: " + ", ".join(aliases))
+            meta.setObjectName("importRowMeta")
+            text.addWidget(meta)
+        if error:
+            problem = ElidedLabel(f"\u26a0 {error}")
+            problem.setObjectName("importRowError")
+            text.addWidget(problem)
+
+        self.edit_button = QToolButton()
+        self.edit_button.setObjectName("ResultEditButton")
+        self.edit_button.setIcon(QIcon(glyph_pixmap(OutlineIcon.PENCIL, 18, QColor("#8b929e"))))
+        self.edit_button.setIconSize(QSize(18, 18))
+        self.edit_button.setFixedSize(30, 30)
+        self.edit_button.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.edit_button.setToolTip("Edit name, aliases or icon before adding")
+
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(10, 8, 8, 8)
+        layout.setSpacing(10)
+        layout.addWidget(self.check)
+        layout.addWidget(icon_label)
+        layout.addLayout(text, 1)
+        layout.addWidget(self.edit_button)
 
 
 class ExportCommandsDialog(DragToMoveMixin, QDialog):

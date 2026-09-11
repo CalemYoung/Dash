@@ -14,6 +14,7 @@ from .calculator import eval_expression
 from .icon_browser import glyph_pixmap, OutlineIcon
 from .version import current_version, is_newer_version
 from .keys import format_shortcut, key_sequences
+from .widgets import ElidedLabel
 from .updater import ReleaseInfo, UpdateDownloader, is_installed_build, launch_installer, parse_release
 import os
 import sys
@@ -1464,13 +1465,11 @@ class MainWindow(QMainWindow):
         self.results_list_widget.show()
         self._sync_search_view_size()
         item = QListWidgetItem(self.results_list_widget)
-        new_command = self._format_shortcut(self.settings.shortcuts.new_command)
-        hotkey = self._format_shortcut(self.settings.general.hotkey)
         row = ResultRow(
             self,
             icon_path=self.settings.paths.program_icon,
-            command="Add your installed programs",
-            description=f"Enter scans this PC. {new_command} adds one by hand. {hotkey} opens Dash anywhere.",
+            command="Find recommended commands",
+            description="No commands added yet",
             action=self.choose_recent_programs,
         )
         item.setSizeHint(row.sizeHint())
@@ -1605,32 +1604,6 @@ class MainWindow(QMainWindow):
             "© 2025 Calem Young"
         )
         about_box.exec()
-
-
-class ElidedLabel(QLabel):
-    """Single-line label that trims long text with an ellipsis instead of
-    forcing the row wider or being clipped mid-word."""
-
-    def __init__(self, text, parent):
-        super().__init__(text, parent)
-        self._full_text = text
-        self.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
-        self.setMinimumWidth(0)
-
-    def setText(self, text):
-        self._full_text = text
-        self._apply_elision()
-
-    def resizeEvent(self, event):
-        super().resizeEvent(event)
-        self._apply_elision()
-
-    def _apply_elision(self):
-        available = max(0, self.width())
-        elided = self.fontMetrics().elidedText(self._full_text, Qt.TextElideMode.ElideRight, available)
-        if elided != super().text():
-            super().setText(elided)
-        self.setToolTip(self._full_text if elided != self._full_text else "")
 
 
 class ResultRow(QWidget):
