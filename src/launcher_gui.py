@@ -1190,8 +1190,8 @@ class MainWindow(QMainWindow):
             return
 
         progress = QProgressDialog(self)
-        progress.setWindowTitle("Auto-Populate Commands")
-        progress.setLabelText("Scanning installed programs, folders and favourites...")
+        progress.setWindowTitle("Find Recommended Commands")
+        progress.setLabelText("Looking for apps, folders and websites on this PC...")
         progress.setRange(0, 0)
         progress.setCancelButton(None)
         progress.setMinimumDuration(0)
@@ -1246,14 +1246,14 @@ class MainWindow(QMainWindow):
             self.cmd_manager.reprocess_command_icons(self.icon_manager)
         imported_count = len(summary["imported"])
         skipped_count = len(summary["skipped"])
-        message = f"Imported {imported_count} installed program command"
+        message = f"Added {imported_count} command"
         if imported_count != 1:
             message += "s"
         if skipped_count:
             message += f". Skipped {skipped_count} already-present or conflicting candidate"
             if skipped_count != 1:
                 message += "s"
-        QMessageBox.information(self, "Add Installed Programs", message + "." + self._first_import_tip(first_import and bool(summary["imported"])))
+        QMessageBox.information(self, "Find Recommended Commands", message + "." + self._first_import_tip(first_import and bool(summary["imported"])))
 
         if self.user_text:
             self.cmd_manager.get_matching_commands(self, self.user_text)

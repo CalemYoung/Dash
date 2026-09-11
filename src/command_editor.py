@@ -980,6 +980,13 @@ class CommandEditorPanel(QFrame):
         }
 
     def _save_and_close(self):
+        # An alias typed but not yet confirmed with Enter is meant to be kept:
+        # add it now, and if it is not valid, stay open with the reason shown.
+        if self.alias_box.enter_box.text().strip():
+            self.alias_box.on_enter_pressed()
+            if self.alias_box.enter_box.text().strip():
+                self.alias_box.enter_box.setFocus()
+                return
         entry = self._collect()
         error = self.cmd_manager.validate_command(entry or {}, self._original_name)
         if error:

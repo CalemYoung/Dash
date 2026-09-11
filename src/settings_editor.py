@@ -569,7 +569,7 @@ class SettingsEditorPanel(QFrame):
 
     def _search_group(self):
         search = self._settings.search
-        return self._group(
+        group = self._group(
             "Search",
             [
                 ("Autocomplete", "search.autocomplete", self._check(search.autocomplete)),
@@ -582,6 +582,14 @@ class SettingsEditorPanel(QFrame):
                 ("Maximum results", "search.max_results", self._spin(search.max_results, 1, 200)),
             ],
         )
+        # Run counts drive the "most used first" order, so the reset lives here.
+        reset_counts_button = QPushButton("Reset All Run Counts...")
+        reset_counts_button.setCursor(Qt.CursorShape.PointingHandCursor)
+        reset_counts_button.setToolTip("Set every command's run count back to zero")
+        reset_counts_button.clicked.connect(self.resetRunCountsRequested.emit)
+        form = cast(QFormLayout, group.layout())
+        form.insertRow(3, "", reset_counts_button)
+        return group
 
     def _results_group(self):
         search = self._settings.search
@@ -650,7 +658,7 @@ class SettingsEditorPanel(QFrame):
         layout.setContentsMargins(14, 14, 14, 10)
         layout.setSpacing(4)
 
-        auto_populate_button = QPushButton("Auto-Populate Installed Programs")
+        auto_populate_button = QPushButton("Find Recommended Commands...")
         auto_populate_button.setCursor(Qt.CursorShape.PointingHandCursor)
         auto_populate_button.clicked.connect(self.importProgramsRequested.emit)
 
@@ -662,15 +670,9 @@ class SettingsEditorPanel(QFrame):
         import_button.setCursor(Qt.CursorShape.PointingHandCursor)
         import_button.clicked.connect(self.importCommandsRequested.emit)
 
-        reset_counts_button = QPushButton("Reset All Run Counts...")
-        reset_counts_button.setCursor(Qt.CursorShape.PointingHandCursor)
-        reset_counts_button.setToolTip("Set every command's run count back to zero")
-        reset_counts_button.clicked.connect(self.resetRunCountsRequested.emit)
-
         layout.addWidget(auto_populate_button)
         layout.addWidget(export_button)
         layout.addWidget(import_button)
-        layout.addWidget(reset_counts_button)
         return group
 
     def _value(self, key) -> Any:
@@ -799,7 +801,7 @@ class ProgramImportDialog(DragToMoveMixin, QDialog):
         command_manager=None,
     ):
         super().__init__(parent)
-        self.setWindowTitle("Add Commands")
+        self.setWindowTitle("Recommended Commands")
         self.setObjectName("ProgramImportDialog")
         self.setWindowFlags(FRAMELESS_DIALOG)
         self.setMinimumSize(600, 680)
@@ -807,9 +809,9 @@ class ProgramImportDialog(DragToMoveMixin, QDialog):
         self._command_manager = command_manager
         self._icon_provider = QFileIconProvider()
 
-        title = QLabel("Add Commands")
+        title = QLabel("Recommended Commands")
         title.setObjectName("dialogTitle")
-        subtitle = QLabel("Tick what Dash should know about; nothing is added until you choose it.")
+        subtitle = QLabel("Found on this PC. Tick what Dash should know about; nothing is added until you choose it.")
         subtitle.setObjectName("dialogSubtitle")
         subtitle.setWordWrap(True)
 
