@@ -1178,10 +1178,10 @@ class ExportCommandsDialog(DragToMoveMixin, QDialog):
 class ImportCommandsDialog(DragToMoveMixin, QDialog):
     """Review commands parsed from an imported file before adding them.
 
-    Any candidate can be opened in the command editor (Edit Selected, or a
-    double-click) to change its name, type, target, aliases, description and
-    icon before it is imported. Candidates whose target can't be found are
-    shown disabled with an error message until they have been fixed that way.
+    The pencil on a row opens it in the command editor to change its name,
+    type, target, aliases, description and icon before it is imported.
+    Candidates whose target can't be found are shown disabled with an error
+    message until they have been fixed that way.
     Candidates that would collide with an existing command are left out
     entirely so existing commands are never overwritten.
     """
@@ -1205,8 +1205,10 @@ class ImportCommandsDialog(DragToMoveMixin, QDialog):
         title.setObjectName("dialogTitle")
 
         self.command_list = QListWidget()
-        self.command_list.setObjectName("ProgramImportList")
-        self.command_list.setIconSize(QSize(28, 28))
+        self.command_list.setObjectName("ScanResultList")
+        self.command_list.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.command_list.setSelectionMode(QListWidget.SelectionMode.NoSelection)
+        self.command_list.itemClicked.connect(self._toggle_item)
 
         importable = [c for c in candidates if not c.get("_conflict")]
         for candidate in importable:
@@ -1222,13 +1224,6 @@ class ImportCommandsDialog(DragToMoveMixin, QDialog):
         empty_message.setObjectName("dialogSubtitle")
         empty_message.setVisible(bool(subtitle))
 
-        fix_button = QPushButton("Edit Selected...")
-        fix_button.setObjectName("programImportSelectButton")
-        fix_button.setEnabled(bool(importable))
-        fix_button.setToolTip("Open the selected command in the editor before importing it")
-        fix_button.clicked.connect(self._edit_selected)
-        self.command_list.itemDoubleClicked.connect(lambda _item: self._edit_selected())
-
         select_all_button = QPushButton("Select All Valid")
         select_none_button = QPushButton("Select None")
         select_all_button.setObjectName("programImportSelectButton")
@@ -1241,7 +1236,6 @@ class ImportCommandsDialog(DragToMoveMixin, QDialog):
         selection_row = QHBoxLayout()
         selection_row.addWidget(QLabel(f"{len(importable)} found"))
         selection_row.addStretch(1)
-        selection_row.addWidget(fix_button)
         selection_row.addWidget(select_all_button)
         selection_row.addWidget(select_none_button)
 
@@ -1250,7 +1244,6 @@ class ImportCommandsDialog(DragToMoveMixin, QDialog):
         self._import_button.setEnabled(False)
         buttons.accepted.connect(self.accept)
         buttons.rejected.connect(self.reject)
-        self.command_list.itemChanged.connect(self._update_import_enabled)
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(20, 18, 20, 18)
@@ -1268,27 +1261,28 @@ class ImportCommandsDialog(DragToMoveMixin, QDialog):
         self.raise_()
         self.activateWindow()
 
-    def _add_item(self, candidate: dict, row: int | None = None):
-        error = candidate.get("_error")
-        label = f"{candidate.get('name', '')}\n{candidate.get('location', '')}"
-        aliases = [str(alias) for alias in candidate.get("aliases", []) if str(alias).strip()]
-        if aliases:
-            label += "\nAliases: " + ", ".join(aliases)
-        if error:
-            label += f"\n\u26a0 {error}"
-        item = QListWidgetItem(label)
-        item.setIcon(self._resolve_icon(candidate))
+    def _add_item(self, candidate: dict, row: int | None = None, checked: bool = False):
+        item = QListWidgetItem()
         item.setData(Qt.ItemDataRole.UserRole, candidate)
-        item.setFlags(item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
-        item.setCheckState(Qt.CheckState.Unchecked)
-        if error:
-            item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsUserCheckable)
-            item.setForeground(QColor("#d9534f"))
+        widget = ImportRow(candidate, self._resolve_icon(candidate), checked, self.command_list)
+        widget.check.toggled.connect(lambda _on: self._update_import_enabled())
+        widget.edit_button.clicked.connect(lambda: self._edit_item(item))
+        item.setSizeHint(widget.sizeHint())
         if row is None:
             self.command_list.addItem(item)
         else:
             self.command_list.insertItem(row, item)
+        self.command_list.setItemWidget(item, widget)
         return item
+
+    def _row_widget(self, item: QListWidgetItem) -> "ImportRow | None":
+        widget = self.command_list.itemWidget(item) if item is not None else None
+        return widget if isinstance(widget, ImportRow) else None
+
+    def _toggle_item(self, item: QListWidgetItem):
+        widget = self._row_widget(item)
+        if widget is not None and widget.check.isEnabled():
+            widget.check.setChecked(not widget.check.isChecked())
 
     def _resolve_icon(self, candidate: dict) -> QIcon:
         if candidate.get("_error"):
@@ -1297,22 +1291,17 @@ class ImportCommandsDialog(DragToMoveMixin, QDialog):
         return self._preview_icons.get(icon_type, QIcon())
 
     def _set_all_checked(self, state: Qt.CheckState):
-        self.command_list.blockSignals(True)
-        try:
-            for index in range(self.command_list.count()):
-                item = self.command_list.item(index)
-                if item is not None and item.flags() & Qt.ItemFlag.ItemIsUserCheckable:
-                    item.setCheckState(state)
-        finally:
-            self.command_list.blockSignals(False)
+        for index in range(self.command_list.count()):
+            widget = self._row_widget(self.command_list.item(index))
+            if widget is not None and widget.check.isEnabled():
+                widget.check.setChecked(state == Qt.CheckState.Checked)
         self._update_import_enabled()
 
     def _update_import_enabled(self, _item=None):
         self._import_button.setEnabled(bool(self.selected_candidates()))
 
-    def _edit_selected(self):
-        """Open the selected candidate in the command editor and apply the result."""
-        item = self.command_list.currentItem()
+    def _edit_item(self, item: QListWidgetItem):
+        """The pencil: open the candidate in the command editor and apply the result."""
         if item is None:
             return
         candidate = item.data(Qt.ItemDataRole.UserRole)
@@ -1329,17 +1318,15 @@ class ImportCommandsDialog(DragToMoveMixin, QDialog):
 
         row = self.command_list.row(item)
         self.command_list.takeItem(row)
-        new_item = self._add_item(candidate, row=row)
-        if not candidate["_error"] and not candidate["_conflict"]:
-            # The user just prepared this command, so it is meant to be imported.
-            new_item.setCheckState(Qt.CheckState.Checked)
-        self.command_list.setCurrentItem(new_item)
+        # The user just prepared this command, so it is meant to be imported.
+        self._add_item(candidate, row=row, checked=not candidate["_error"] and not candidate["_conflict"])
         self._update_import_enabled()
 
     def selected_candidates(self) -> list[dict]:
         selected = []
         for index in range(self.command_list.count()):
             item = self.command_list.item(index)
-            if item is not None and item.checkState() == Qt.CheckState.Checked:
+            widget = self._row_widget(item)
+            if widget is not None and widget.check.isChecked():
                 selected.append(item.data(Qt.ItemDataRole.UserRole))
         return selected
