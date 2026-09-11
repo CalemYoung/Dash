@@ -5,7 +5,7 @@ tagline: Dash is a keyboard launcher for Windows
 description: Dash is a fast keyboard launcher for Windows. Open apps, files, folders and websites from one search box. Only the commands you added, in the same order every time.
 url: https://calemyoung.github.io
 baseurl: /Dash
-theme: jekyll-theme-minimal
+theme: jekyll-theme-midnight
 logo: assets/icons/icon.png
 show_downloads: false
 exclude:
