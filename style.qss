@@ -242,6 +242,31 @@ QDialog#LibraryPickerDialog {
     background: #26292f;
 }
 
+/* Tabs in the scan dialog: one page per kind of thing */
+#ProgramImportTabs::pane {
+    border: none;
+    background: transparent;
+}
+
+#ProgramImportTabs QTabBar::tab {
+    background: transparent;
+    color: #8b929e;
+    padding: 8px 14px;
+    margin-right: 6px;
+    border: none;
+    border-bottom: 2px solid transparent;
+    font-size: 13px;
+}
+
+#ProgramImportTabs QTabBar::tab:selected {
+    color: #e7e9ee;
+    border-bottom: 2px solid #7aa2f7;
+}
+
+#ProgramImportTabs QTabBar::tab:hover:!selected {
+    color: #c9ced8;
+}
+
 QPushButton#programImportSelectButton {
     background: transparent;
     border: none;

@@ -21,6 +21,7 @@ from PyQt6.QtWidgets import (
     QLabel,
     QLineEdit,
     QListWidget,
+    QTabWidget,
     QListWidgetItem,
     QPushButton,
     QSpinBox,
@@ -775,12 +776,16 @@ def candidate_kind(candidate: dict) -> str:
 
 
 class ProgramImportDialog(DragToMoveMixin, QDialog):
-    """Choose discovered programs before adding them as Dash commands.
+    """Choose what the scan found before it becomes commands.
 
-    Any candidate can be opened in the command editor (Edit Selected, or a
-    double-click) to change its name, aliases, description, target or icon
-    before it is added.
+    One tab per kind of thing (folders, apps and tools, websites), each with
+    its own filter and list, so a long scan is worked through a page at a
+    time instead of as one mixed list. Any entry can be opened in the command
+    editor (Edit Selected, or a double-click) to change its name, aliases,
+    description, target or icon before it is added.
     """
+
+    KINDS = (("folder", "Folders"), ("app", "Apps and tools"), ("website", "Websites"))
 
     def __init__(
         self,
@@ -791,73 +796,106 @@ class ProgramImportDialog(DragToMoveMixin, QDialog):
         command_manager=None,
     ):
         super().__init__(parent)
-        self.setWindowTitle("Auto-Populate Commands")
+        self.setWindowTitle("Add Commands")
         self.setObjectName("ProgramImportDialog")
         self.setWindowFlags(FRAMELESS_DIALOG)
-        self.setMinimumSize(560, 640)
+        self.setMinimumSize(600, 680)
         self._icon_manager = icon_manager
         self._command_manager = command_manager
         self._icon_provider = QFileIconProvider()
 
-        title = QLabel("Auto-Populate Commands")
+        title = QLabel("Add Commands")
         title.setObjectName("dialogTitle")
+        subtitle = QLabel("What this PC has to offer. Tick what Dash should know about; nothing is added until you choose it.")
+        subtitle.setObjectName("dialogSubtitle")
+        subtitle.setWordWrap(True)
 
-        self.program_list = QListWidget()
-        self.program_list.setObjectName("ProgramImportList")
-        self.program_list.setIconSize(QSize(28, 28))
+        selectable = filter_new_program_commands(candidates, existing_locations)
+        self.tabs = QTabWidget()
+        self.tabs.setObjectName("ProgramImportTabs")
+        self.tabs.setDocumentMode(True)
+        self.lists: dict[str, QListWidget] = {}
+        self.filters: dict[str, QLineEdit] = {}
+        for kind, heading in self.KINDS:
+            group = [c for c in selectable if candidate_kind(c) == kind]
+            if not group:
+                continue
+            group.sort(key=lambda c: not c.get("suggested"))  # Windows' own suggestions lead
+            page, list_widget, filter_box = self._build_page(kind, group)
+            self.lists[kind] = list_widget
+            self.filters[kind] = filter_box
+            self.tabs.addTab(page, f"{heading} ({len(group)})")
 
-        selectable_candidates = filter_new_program_commands(candidates, existing_locations)
-        # Three kinds of thing, each under its own heading so they can be
-        # ticked through in turn; Windows' own suggestions lead each group.
-        for heading, kind in (("Folders", "folder"), ("Apps and tools", "app"), ("Websites", "website")):
-            group = [c for c in selectable_candidates if candidate_kind(c) == kind]
-            group.sort(key=lambda c: not c.get("suggested"))
-            if group:
-                self._add_section_header(heading)
-            for candidate in group:
-                self._add_item(candidate)
-
-        empty_message = QLabel("Nothing new was found." if not selectable_candidates else "")
+        empty_message = QLabel("Nothing new was found. Everything the scan knows about is already a command.")
         empty_message.setObjectName("dialogSubtitle")
-        empty_message.setVisible(not selectable_candidates)
+        empty_message.setWordWrap(True)
+        empty_message.setVisible(not selectable)
+        self.tabs.setVisible(bool(selectable))
 
-        edit_button = QPushButton("Edit Selected...")
-        edit_button.setObjectName("programImportSelectButton")
-        edit_button.setEnabled(bool(selectable_candidates) and command_manager is not None)
-        edit_button.setToolTip("Open the selected program in the editor before adding it")
-        edit_button.clicked.connect(self._edit_selected)
-        self.program_list.itemDoubleClicked.connect(lambda _item: self._edit_selected())
+        self.edit_button = QPushButton("Edit Selected...")
+        self.edit_button.setObjectName("programImportSelectButton")
+        self.edit_button.setEnabled(bool(selectable) and command_manager is not None)
+        self.edit_button.setToolTip("Open the highlighted entry in the editor before adding it")
+        self.edit_button.clicked.connect(self._edit_selected)
 
-        select_all_button = QPushButton("Select All")
-        select_none_button = QPushButton("Select None")
-        select_all_button.setObjectName("programImportSelectButton")
-        select_none_button.setObjectName("programImportSelectButton")
-        select_all_button.setEnabled(bool(selectable_candidates))
-        select_none_button.setEnabled(bool(selectable_candidates))
-        select_all_button.clicked.connect(lambda: self._set_all_checked(Qt.CheckState.Checked))
-        select_none_button.clicked.connect(lambda: self._set_all_checked(Qt.CheckState.Unchecked))
+        select_all_button = QPushButton("Select all on this tab")
+        select_none_button = QPushButton("Select none")
+        for button in (select_all_button, select_none_button):
+            button.setObjectName("programImportSelectButton")
+            button.setEnabled(bool(selectable))
+        select_all_button.clicked.connect(lambda: self._set_visible_checked(Qt.CheckState.Checked))
+        select_none_button.clicked.connect(lambda: self._set_visible_checked(Qt.CheckState.Unchecked))
+
+        self.selected_label = QLabel()
+        self.selected_label.setObjectName("dialogSubtitle")
 
         selection_row = QHBoxLayout()
-        selection_row.addWidget(QLabel(f"{len(selectable_candidates)} found"))
+        selection_row.addWidget(self.selected_label)
         selection_row.addStretch(1)
-        selection_row.addWidget(edit_button)
+        selection_row.addWidget(self.edit_button)
         selection_row.addWidget(select_all_button)
         selection_row.addWidget(select_none_button)
 
         buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Cancel)
-        add_button = cast(QPushButton, buttons.addButton("Add Selected", QDialogButtonBox.ButtonRole.AcceptRole))
-        add_button.setEnabled(bool(selectable_candidates))
+        self.add_button = cast(QPushButton, buttons.addButton("Add Selected", QDialogButtonBox.ButtonRole.AcceptRole))
         buttons.accepted.connect(self.accept)
         buttons.rejected.connect(self.reject)
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(20, 18, 20, 18)
-        layout.setSpacing(12)
+        layout.setSpacing(10)
         layout.addWidget(title)
-        layout.addLayout(selection_row)
-        layout.addWidget(self.program_list, 1)
+        layout.addWidget(subtitle)
+        layout.addWidget(self.tabs, 1)
         layout.addWidget(empty_message)
+        layout.addLayout(selection_row)
         layout.addWidget(buttons)
+        self._refresh_selection_count()
+
+    def _build_page(self, kind: str, group: list[dict]):
+        page = QWidget()
+        filter_box = QLineEdit()
+        filter_box.setPlaceholderText(f"Filter {self._heading(kind).lower()}...")
+        filter_box.setClearButtonEnabled(True)
+        list_widget = QListWidget()
+        list_widget.setObjectName("ProgramImportList")
+        list_widget.setIconSize(QSize(28, 28))
+        # Long URLs would otherwise add a scrollbar under every page.
+        list_widget.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        for candidate in group:
+            self._add_item(list_widget, candidate)
+        filter_box.textChanged.connect(lambda text, lw=list_widget: self._apply_filter(lw, text))
+        list_widget.itemChanged.connect(lambda _item: self._refresh_selection_count())
+        list_widget.itemDoubleClicked.connect(lambda _item: self._edit_selected())
+        page_layout = QVBoxLayout(page)
+        page_layout.setContentsMargins(0, 10, 0, 0)
+        page_layout.setSpacing(8)
+        page_layout.addWidget(filter_box)
+        page_layout.addWidget(list_widget, 1)
+        return page, list_widget, filter_box
+
+    def _heading(self, kind: str) -> str:
+        return dict(self.KINDS)[kind]
 
     def showEvent(self, event):
         # Frameless windows are not placed or focused by the window manager
@@ -880,7 +918,7 @@ class ProgramImportDialog(DragToMoveMixin, QDialog):
                 return icon
         return QIcon()
 
-    def _add_item(self, candidate: dict, row: int | None = None, checked: bool = False):
+    def _add_item(self, list_widget: QListWidget, candidate: dict, row: int | None = None, checked: bool = False):
         label = f"{candidate.get('name', '')}\n{candidate.get('location', '')}"
         aliases = [str(alias) for alias in candidate.get("aliases", []) if str(alias).strip()]
         if aliases:
@@ -897,57 +935,83 @@ class ProgramImportDialog(DragToMoveMixin, QDialog):
             item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsUserCheckable)
             item.setForeground(QColor("#d9534f"))
         if row is None:
-            self.program_list.addItem(item)
+            list_widget.addItem(item)
         else:
-            self.program_list.insertItem(row, item)
+            list_widget.insertItem(row, item)
         return item
 
-    def _add_section_header(self, text: str):
-        """Add a label row. Headers carry no candidate and no flags, which is
-        how the selection helpers tell them apart from real entries."""
-        item = QListWidgetItem(text)
-        item.setFlags(Qt.ItemFlag.NoItemFlags)
-        font = item.font()
-        font.setBold(True)
-        item.setFont(font)
-        self.program_list.addItem(item)
+    def _current_list(self) -> QListWidget | None:
+        page = self.tabs.currentWidget()
+        if page is None:
+            return None
+        return page.findChild(QListWidget)
+
+    @staticmethod
+    def _apply_filter(list_widget: QListWidget, text: str):
+        """Hide rows whose name or location does not contain the text."""
+        needle = text.strip().casefold()
+        for index in range(list_widget.count()):
+            item = list_widget.item(index)
+            if item is None:
+                continue
+            candidate = item.data(Qt.ItemDataRole.UserRole) or {}
+            haystack = f"{candidate.get('name', '')} {candidate.get('location', '')} {' '.join(candidate.get('aliases', []))}".casefold()
+            item.setHidden(bool(needle) and needle not in haystack)
 
     def _edit_selected(self):
-        """Open the selected program in the command editor and apply the result."""
-        item = self.program_list.currentItem()
-        if item is None or self._command_manager is None:
+        """Open the highlighted entry in the command editor and apply the result."""
+        list_widget = self._current_list()
+        if list_widget is None or self._command_manager is None:
+            return
+        item = list_widget.currentItem()
+        if item is None:
             return
         candidate = item.data(Qt.ItemDataRole.UserRole)
         if candidate is None:
             return
 
-        dialog = CommandEditDialog(candidate, self._command_manager, self._icon_manager, self, title="Edit Program")
+        dialog = CommandEditDialog(candidate, self._command_manager, self._icon_manager, self, title="Edit Command")
         if dialog.exec() != QDialog.DialogCode.Accepted or dialog.result_command is None:
             return
 
         apply_edited_candidate(candidate, dialog.result_command)
         candidate["_error"], candidate["_conflict"] = self._command_manager.check_import_candidate(candidate)
 
-        row = self.program_list.row(item)
-        self.program_list.takeItem(row)
+        row = list_widget.row(item)
+        list_widget.takeItem(row)
         importable = not candidate["_error"] and not candidate["_conflict"]
-        new_item = self._add_item(candidate, row=row, checked=importable)
-        self.program_list.setCurrentItem(new_item)
+        new_item = self._add_item(list_widget, candidate, row=row, checked=importable)
+        list_widget.setCurrentItem(new_item)
+        self._refresh_selection_count()
 
-    def _set_all_checked(self, state: Qt.CheckState):
-        for index in range(self.program_list.count()):
-            item = self.program_list.item(index)
-            if item is not None and item.flags() & Qt.ItemFlag.ItemIsUserCheckable:
+    def _set_visible_checked(self, state: Qt.CheckState):
+        """Select all / none applies to the current tab, and only to the rows
+        the filter is showing, so a filtered list can be ticked in one go."""
+        list_widget = self._current_list()
+        if list_widget is None:
+            return
+        for index in range(list_widget.count()):
+            item = list_widget.item(index)
+            if item is not None and not item.isHidden() and item.flags() & Qt.ItemFlag.ItemIsUserCheckable:
                 item.setCheckState(state)
+        self._refresh_selection_count()
+
+    def _refresh_selection_count(self):
+        count = len(self.selected_candidates())
+        self.selected_label.setText(f"{count} selected" if count else "Nothing selected yet")
+        self.add_button.setText(f"Add {count} Selected" if count else "Add Selected")
+        self.add_button.setEnabled(count > 0)
 
     def selected_candidates(self) -> list[dict]:
+        """Ticked entries across every tab, filtered or not."""
         selected = []
-        for index in range(self.program_list.count()):
-            item = self.program_list.item(index)
-            if item is None or item.data(Qt.ItemDataRole.UserRole) is None:
-                continue
-            if item.checkState() == Qt.CheckState.Checked:
-                selected.append(item.data(Qt.ItemDataRole.UserRole))
+        for list_widget in self.lists.values():
+            for index in range(list_widget.count()):
+                item = list_widget.item(index)
+                if item is None or item.data(Qt.ItemDataRole.UserRole) is None:
+                    continue
+                if item.checkState() == Qt.CheckState.Checked:
+                    selected.append(item.data(Qt.ItemDataRole.UserRole))
         return selected
 
 
