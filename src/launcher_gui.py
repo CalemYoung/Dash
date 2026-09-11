@@ -1328,15 +1328,15 @@ class MainWindow(QMainWindow):
         """Clear every command's run count after confirmation."""
         tracked = sum(1 for count in self.cmd_manager.run_counts.values() if count > 0)
         if tracked == 0:
-            QMessageBox.information(self, "Reset Run Counts", "No commands have been run yet.")
+            QMessageBox.information(self, "Clear Usage History", "No commands have been opened yet.")
             return
 
         message_box = QMessageBox(self)
-        message_box.setWindowTitle("Reset Run Counts")
+        message_box.setWindowTitle("Clear Usage History")
         message_box.setIcon(QMessageBox.Icon.Question)
-        message_box.setText(f"Reset the run count of {tracked} command{'s' if tracked != 1 else ''} to zero?")
-        message_box.setInformativeText("Results sorted by popularity will start from scratch. This cannot be undone.")
-        reset_button = message_box.addButton("Reset", QMessageBox.ButtonRole.DestructiveRole)
+        message_box.setText(f"Forget how often {tracked} command{'s have' if tracked != 1 else ' has'} been opened?")
+        message_box.setInformativeText("\"Most used first\" will start over from what you open next. This cannot be undone.")
+        reset_button = message_box.addButton("Clear", QMessageBox.ButtonRole.DestructiveRole)
         message_box.addButton(QMessageBox.StandardButton.Cancel)
         message_box.exec()
         if message_box.clickedButton() is not reset_button:

@@ -582,13 +582,14 @@ class SettingsEditorPanel(QFrame):
                 ("Maximum results", "search.max_results", self._spin(search.max_results, 1, 200)),
             ],
         )
-        # Run counts drive the "most used first" order, so the reset lives here.
-        reset_counts_button = QPushButton("Reset All Run Counts...")
-        reset_counts_button.setCursor(Qt.CursorShape.PointingHandCursor)
-        reset_counts_button.setToolTip("Set every command's run count back to zero")
-        reset_counts_button.clicked.connect(self.resetRunCountsRequested.emit)
+        # How often each command is opened is what "most used first" sorts
+        # by, so the way to clear it sits right under that setting.
+        clear_history_button = QPushButton("Clear...")
+        clear_history_button.setCursor(Qt.CursorShape.PointingHandCursor)
+        clear_history_button.setToolTip("Forget how often each command has been opened, so \"most used first\" starts over")
+        clear_history_button.clicked.connect(self.resetRunCountsRequested.emit)
         form = cast(QFormLayout, group.layout())
-        form.insertRow(3, "", reset_counts_button)
+        form.insertRow(3, "Usage history", clear_history_button)
         return group
 
     def _results_group(self):

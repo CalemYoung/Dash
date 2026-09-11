@@ -1043,8 +1043,8 @@ class CommandEditorPanel(QFrame):
 
     def _refresh_reset_button(self):
         count = int(self._command.get("times_executed", 0) or 0)
-        self.reset_count_btn.setText(f"Reset run count ({count})")
-        self.reset_count_btn.setToolTip(f"Run {count} time{'s' if count != 1 else ''}. Set the count back to zero.")
+        self.reset_count_btn.setText(f"Opened {count} time{'s' if count != 1 else ''} \u00b7 Clear")
+        self.reset_count_btn.setToolTip("Forget how often this command has been opened; it will sort as unused.")
         self.reset_count_btn.setVisible(bool(self._original_name) and not self._standalone and count > 0)
 
     def _reset_run_count(self):
