@@ -19,7 +19,16 @@
 
 ---
 
-## Why another launcher
+## Features
+
+- **Instant access:** Open Dash from anywhere with the global `Alt+F` hotkey.
+- **Flexible commands:** Launch applications, files, folders, and URLs from one search box.
+- **Aliases:** Add the terms you naturally type, so `gh` can open GitHub and `mail` your inbox.
+- **Quick calculations:** Evaluate mathematical expressions without opening another app.
+- **Command tree:** Optionally show a side panel that maps how each letter you type narrows the matches. Turn it on under Settings.
+- **Made to fit:** Customize commands, icons, settings, and startup behavior.
+
+## Why another launcher?
 
 Dash came out of using launchers that index everything on the machine. They
 lagged while typing, and now and then the results reordered between one
@@ -41,15 +50,6 @@ Dash does less on purpose:
 
 If you want a launcher that searches your files and the web, there are good
 ones. Dash is for when you already know what you are going to type.
-
-## Features
-
-- **Instant access:** Open Dash from anywhere with the global `Alt+F` hotkey.
-- **Flexible commands:** Launch applications, files, folders, and URLs from one search box.
-- **Aliases:** Add the terms you naturally type, so `gh` can open GitHub and `mail` your inbox.
-- **Quick calculations:** Evaluate mathematical expressions without opening another app.
-- **Command tree:** Optionally show a side panel that maps how each letter you type narrows the matches. Turn it on under Settings.
-- **Made to fit:** Customize commands, icons, settings, and startup behavior.
 
 ## See Dash in action
 
