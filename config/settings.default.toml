@@ -48,6 +48,7 @@ show_command_tree = false
 [shortcuts]
 edit_selected_command = "Ctrl+Return"
 new_command = "Ctrl+N"
+open_settings = "Ctrl+,"
 
 [paths]
 program_icon = "assets/icons/icon.png"

@@ -91,6 +91,7 @@ class SearchSettings:
 class ShortcutSettings:
     edit_selected_command: str = DEFAULT_SETTINGS["shortcuts"]["edit_selected_command"]
     new_command: str = DEFAULT_SETTINGS["shortcuts"]["new_command"]
+    open_settings: str = DEFAULT_SETTINGS["shortcuts"]["open_settings"]
 
 
 @dataclass

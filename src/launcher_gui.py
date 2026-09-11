@@ -334,6 +334,7 @@ class MainWindow(QMainWindow):
             (
                 f"New: {self._format_shortcut(self.settings.shortcuts.new_command)}",
                 f"Edit: {self._format_shortcut(self.settings.shortcuts.edit_selected_command)}",
+                f"Settings: {self._format_shortcut(self.settings.shortcuts.open_settings)}",
             )
         )
 
@@ -508,6 +509,11 @@ class MainWindow(QMainWindow):
         self.new_command_shortcut.setKeys(_key_sequences(self.settings.shortcuts.new_command))
         self.new_command_shortcut.setContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
         self.new_command_shortcut.activated.connect(self.open_new_command)
+
+        self.settings_shortcut = QShortcut(self.central_widget)
+        self.settings_shortcut.setKeys(_key_sequences(self.settings.shortcuts.open_settings))
+        self.settings_shortcut.setContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
+        self.settings_shortcut.activated.connect(self.open_settings_from_search)
 
     def _apply_search_text_style(self):
         self.search_input_widget.setStyleSheet(
@@ -951,6 +957,13 @@ class MainWindow(QMainWindow):
             # Development - settings in project folder
             return Path(__file__).parent.parent / "config" / "settings.toml"
 
+    def open_settings_from_search(self):
+        """The settings shortcut, from the search view only: inside an editor
+        the same keys belong to that editor's fields."""
+        if hasattr(self, "view_stack") and self.view_stack.currentWidget() is not self.central_widget:
+            return
+        self.open_settings_editor()
+
     def open_settings_editor(self):
         settings_path = self._settings_path()
         previous_center = self.frameGeometry().center()
@@ -988,6 +1001,7 @@ class MainWindow(QMainWindow):
             self._hotkey_listener.update_hotkey(settings.general.hotkey)
         self.edit_shortcut.setKeys(_key_sequences(settings.shortcuts.edit_selected_command))
         self.new_command_shortcut.setKeys(_key_sequences(settings.shortcuts.new_command))
+        self.settings_shortcut.setKeys(_key_sequences(settings.shortcuts.open_settings))
         self._apply_search_text_style()
         self._layout_scale = max(0.8, min(1.4, settings.ui.program_width / 500))
         self._layout_margin = max(10, round(10 * self._layout_scale))
@@ -1579,13 +1593,15 @@ class MainWindow(QMainWindow):
         hotkey = self._format_shortcut(self.settings.general.hotkey)
         new_command = self._format_shortcut(self.settings.shortcuts.new_command)
         edit_command = self._format_shortcut(self.settings.shortcuts.edit_selected_command)
+        open_settings = self._format_shortcut(self.settings.shortcuts.open_settings)
         about_box.setInformativeText(
             f"Version {version}\n\n"
             "A quick command launcher for Windows.\n\n"
             "Keyboard shortcuts:\n"
             f"{hotkey}  Open Dash\n"
             f"{new_command}  New command\n"
-            f"{edit_command}  Edit selected command\n\n"
+            f"{edit_command}  Edit selected command\n"
+            f"{open_settings}  Open settings\n\n"
             "© 2025 Calem Young"
         )
         about_box.exec()

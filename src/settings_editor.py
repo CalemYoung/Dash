@@ -598,6 +598,7 @@ class SettingsEditorPanel(QFrame):
             [
                 ("Edit selected command", "shortcuts.edit_selected_command", self._hotkey_edit(shortcuts.edit_selected_command)),
                 ("New command", "shortcuts.new_command", self._hotkey_edit(shortcuts.new_command)),
+                ("Open settings", "shortcuts.open_settings", self._hotkey_edit(shortcuts.open_settings)),
             ],
         )
 
@@ -717,6 +718,7 @@ class SettingsEditorPanel(QFrame):
             shortcuts=ShortcutSettings(
                 edit_selected_command=self._value("shortcuts.edit_selected_command"),
                 new_command=self._value("shortcuts.new_command"),
+                open_settings=self._value("shortcuts.open_settings"),
             ),
             paths=self._settings.paths,
         )
