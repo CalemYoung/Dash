@@ -3,11 +3,11 @@
 </h1>
 
 <p align="center">
-   <strong>Dash is a keyboard launcher for Windows that only knows the commands you gave it.</strong>
+   <strong>Dash is a fast, predictable keyboard launcher for Windows.</strong>
 </p>
 
 <p align="center">
-   Type a few letters, press Enter, and the same thing opens every time.
+   Your apps, files, folders and websites are a few letters away, and the same thing opens every time.
 </p>
 
 <p align="center">
@@ -85,7 +85,7 @@ matches. Turn it on under Settings.
 With winget:
 
 ```powershell
-winget install CalemYoung.Dash
+winget install dash
 ```
 
 Or by hand:
