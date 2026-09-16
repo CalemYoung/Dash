@@ -60,12 +60,31 @@ ones. Dash is for when you already know what you are going to type.
 
 ### Search and launch
 
-Type a few letters and the name completes inline. Aliases work the same way,
-a site command searches the site once you add a space, and an expression is
-worked out where you type it.
+Type a few letters and the name completes inline. The results are only ever
+the commands that still match, so the list shrinks as you type. Aliases work
+the same way, and an expression is worked out where you type it.
 
 <p align="left">
-   <img src="assets/launcher-search.gif" alt="Typing into Dash: s narrows to five commands and completes to Spotify, the alias gh finds GitHub, gh dash searches GitHub, and 12*8 shows 96" width="600">
+   <img src="assets/launcher-search.gif" alt="Typing into Dash: s narrows to five commands and completes to Spotify, the alias gh finds GitHub, and 12*8 shows 96" width="600">
+</p>
+
+### Search a website from the search box
+
+Give a website command an address with `{query}` in it and its name becomes a
+keyword: type the name on its own and the site opens, add a space and the rest
+of what you type is searched for.
+
+<p align="left">
+   <img src="assets/site-search.gif" alt="Typing gh finds GitHub; a space turns the row into Search GitHub, and typing dash makes it Search GitHub for dash" width="600">
+</p>
+
+### Groups
+
+A group is a command whose targets are other commands. They open in order, so
+everything a job needs starts from one name.
+
+<p align="left">
+   <img src="assets/command-group.gif" alt="Typing start finds the Start work group, which opens in the editor with Slack, Spotify and Screenshots as the commands it opens" width="600">
 </p>
 
 ### Manage commands
@@ -102,13 +121,10 @@ The hotkey and the three `Ctrl` shortcuts are yours to change under Settings.
 
 ## Beyond opening things
 
-- **Search a site.** Give a website command an address with `{query}` in it,
-  such as `https://github.com/search?q={query}`. Typing the command's name on
-  its own opens the site; typing `gh dash` after it searches for "dash".
-  Dash can also offer a web search for text nothing matched, which is off
-  until you turn it on in Settings.
-- **Group commands.** A group is a command whose targets are other commands.
-  They open in order, and one that fails does not stop the rest.
+- **Web search.** When nothing matches at all, Dash can offer to search the
+  web for what you typed. Off until you turn it on in Settings.
+- **Groups carry on.** A target that has been deleted or will not open is
+  reported when the group finishes, rather than stopping the ones after it.
 - **Switch instead of relaunch.** If an app's window is already open, Dash
   brings it forward rather than starting it again. Turn it off under Settings
   if you would rather always start a fresh copy.

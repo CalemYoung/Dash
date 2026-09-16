@@ -7,8 +7,8 @@ launcher and the demos follow.
 
     .\\.venv\\Scripts\\python.exe build\\scripts\\record_demos.py
 
-Takes the scene names to record (search, editor, tree) or none for all of them,
-and writes assets/<scene>.gif.
+Takes the scene names to record (search, site, group, editor, tree) or none for
+all of them, and writes each one into assets/.
 """
 
 import argparse
@@ -24,10 +24,12 @@ ROOT = Path(__file__).resolve().parent.parent.parent
 # down. The app still lays itself out at 1x -- scaling Qt itself would halve
 # the screen it thinks it has, and the editor would be squeezed to fit it.
 SCALE = 2
-# What the window sits on. The launcher's corners are rounded and its own
-# background is dark, so anything else would show as a halo around them.
-BACKDROP = (0, 0, 0)
-PAD = 12 * SCALE
+# Frames are one size, but the window is not: it grows a row at a time as
+# results appear. The space around it is left transparent so a short frame
+# reads as a short window rather than as an empty box, whatever colour the
+# page behind it is.
+TRANSPARENT_INDEX = 255
+PAD = 8 * SCALE
 
 WORKDIR = Path(os.environ.get("TEMP", ".")) / "dash-demo-recording"
 
@@ -223,11 +225,12 @@ class Recorder:
         self.frame(hold)
 
 
-def save_gif(frames, path, colors=160):
-    """Write the frames as a GIF, padded to one size on the backdrop.
+def save_gif(frames, path, colors=255):
+    """Write the frames as a GIF sized to the largest of them, with whatever
+    the window does not cover left transparent.
 
-    Every frame is quantized to a single palette built from all of them, so
-    the colours do not shift as the window grows.
+    One palette is built from every frame, so the colours do not shift as the
+    window grows, and its last index is kept for the transparent area.
     """
     from PIL import Image
 
@@ -236,25 +239,40 @@ def save_gif(frames, path, colors=160):
 
     padded = []
     for frame, _ in frames:
-        canvas = Image.new("RGB", (width, height), BACKDROP)
         # Pinned to the top left: the search box stays put while the results
         # list and the tree panel grow down and to the right.
-        canvas.paste(frame.convert("RGB"), (PAD, PAD), frame)
+        canvas = Image.new("RGBA", (width, height), (0, 0, 0, 0))
+        canvas.paste(frame, (PAD, PAD))
         padded.append(canvas)
 
     strip = Image.new("RGB", (width, height * len(padded)))
     for index, canvas in enumerate(padded):
-        strip.paste(canvas, (0, index * height))
+        strip.paste(canvas.convert("RGB"), (0, index * height))
     palette = strip.quantize(colors=colors)
 
-    quantized = [canvas.quantize(palette=palette, dither=Image.Dither.NONE) for canvas in padded]
+    quantized = []
+    for canvas in padded:
+        # The window's rounded corners fade out over a pixel or two, and a GIF
+        # is either transparent or not: anything half covered stays painted.
+        clear = canvas.getchannel("A").point(lambda alpha: 255 if alpha < 128 else 0)
+        frame = canvas.convert("RGB").quantize(palette=palette, dither=Image.Dither.NONE)
+        frame.paste(TRANSPARENT_INDEX, clear)
+        quantized.append(frame)
+
     quantized[0].save(
         path,
         save_all=True,
         append_images=quantized[1:],
         duration=[duration for _, duration in frames],
         loop=0,
-        optimize=True,
+        # Left unoptimized on purpose: the optimizer crops frames to what
+        # changed and drops their transparency flag, which leaves a renderer
+        # free to paint the area around a short window rather than clear it.
+        optimize=False,
+        transparency=TRANSPARENT_INDEX,
+        # Clear back to transparent between frames, so the taller frames do
+        # not leave their results behind under the shorter ones.
+        disposal=2,
     )
     print(f"{path.name}: {len(frames)} frames, {path.stat().st_size / 1024:.0f} KB, {width}x{height}")
 
@@ -287,15 +305,49 @@ def scene_search(app):
 
     recorder.clear(search)
     recorder.type(search, "gh")
-    recorder.hold(1100)
-
-    recorder.type(search, " dash")
     recorder.hold(1400)
 
     recorder.clear(search)
     # Typed in one go: a half-written expression shows "No results found",
     # which reads as a glitch rather than as the point being made.
     recorder.enter_text(search, "12*8", hold=2200)
+
+    window.close()
+    return recorder.frames
+
+
+def scene_site_search(app):
+    """A website command with {query}: the name opens it, a space searches it."""
+    window = launcher(app)
+    search = window.search_input_widget
+    recorder = Recorder(app, window)
+
+    recorder.type(search, "gh")
+    recorder.hold(1200)
+
+    # The space is what turns the command into a search of the site.
+    recorder.type(search, " ", per_char=200)
+    recorder.hold(1400)
+
+    recorder.type(search, "dash", per_char=160)
+    recorder.hold(2000)
+
+    window.close()
+    return recorder.frames
+
+
+def scene_group(app):
+    """A group: one command whose targets are other commands."""
+    window = launcher(app)
+    search = window.search_input_widget
+    recorder = Recorder(app, window)
+
+    recorder.type(search, "start", per_char=160)
+    recorder.hold(1800)
+
+    window.open_editor(window.cmd_manager.find_command("Start work"))
+    recorder.pump(500)
+    recorder.frame(2600)
 
     window.close()
     return recorder.frames
@@ -346,6 +398,8 @@ def scene_tree(app):
 
 SCENES = {
     "search": ("launcher-search.gif", scene_search),
+    "site": ("site-search.gif", scene_site_search),
+    "group": ("command-group.gif", scene_group),
     "editor": ("command-editor.gif", scene_editor),
     "tree": ("command-tree.gif", scene_tree),
 }
