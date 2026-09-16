@@ -102,7 +102,7 @@ jobs:
           WINGET_TOKEN: ${{ secrets.WINGET_TOKEN }}
         run: |
           if ([string]::IsNullOrEmpty($env:WINGET_TOKEN)) {
-            Write-Host "WINGET_TOKEN secret is not set; skipping the winget submission."
+            Write-Host "::warning title=winget submission skipped::WINGET_TOKEN secret is not set, so $env:GITHUB_REF_NAME was not submitted to winget-pkgs."
             "present=false" >> $env:GITHUB_OUTPUT
           } else {
             "present=true" >> $env:GITHUB_OUTPUT
