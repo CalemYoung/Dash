@@ -93,7 +93,7 @@ Press Ctrl+Enter on a result to edit it in place: name, description, type,
 target, browser, aliases and icon.
 
 <p align="left">
-   <img src="assets/command-editor.gif" alt="The GitHub command open in the editor, where a second alias is typed and added as a chip" width="420">
+   <img src="assets/command-editor.gif" alt="The GitHub command open in the editor, where a second alias is typed and added as a chip" width="600">
 </p>
 
 ### Command tree
@@ -102,7 +102,7 @@ An optional side panel that shows how each letter you type narrows the
 matches. Turn it on under Settings.
 
 <p align="left">
-   <img src="assets/command-tree.gif" alt="The command tree panel narrowing from s, through st, to Start work" width="780">
+   <img src="assets/command-tree.gif" alt="The command tree panel narrowing from s, through st, to Start work" width="600">
 </p>
 
 ## Keys
@@ -215,26 +215,6 @@ installer to `dist/DashSetup-<version>.exe`.
 
 <details>
 <summary><strong>Re-record the README demos</strong></summary>
-
-<br>
-
-The GIFs above are the app itself, driven by a script: it builds a launcher on
-a throwaway config of demo commands, types into it with real key events and
-grabs a frame after each one.
-
-```powershell
-.\.venv\Scripts\python.exe build\scripts\record_demos.py
-```
-
-Pass `search`, `editor` or `tree` to redo one of them. Run it after changing
-the launcher and the demos follow, rather than showing a UI that has moved on.
-
-</details>
-
-<details>
-<summary><strong>Publish a GitHub release</strong></summary>
-
-<br>
 
 Releases are built on GitHub's Windows runner. The workflow compiles the
 PyInstaller bundle with Inno Setup, verifies the installer, and attaches it to
