@@ -11,6 +11,7 @@ from .icon_manager import IconManager
 from .command_trie import TrieSnapshot
 from typing import cast
 from .calculator import eval_expression
+from .popular_websites import POPULAR_WEBSITES
 from .browsers import fill_query, is_search_link
 from .browsers import open_url as open_in_browser
 from .icon_browser import glyph_pixmap, OutlineIcon
@@ -59,6 +60,7 @@ class ProgramDiscoveryThread(QThread):
 
             from .installed_programs import discover_packaged_apps, discover_recent_program_commands
             from .personal_places import discover_bookmark_bar, discover_quick_access_folders
+            from .popular_websites import discover_popular_websites
             from .windows_settings import discover_settings_pages
 
             self.candidates = discover_recent_program_commands(days=365)
@@ -68,6 +70,9 @@ class ProgramDiscoveryThread(QThread):
             self.candidates += discover_quick_access_folders()
             self.candidates += discover_bookmark_bar()
             self.candidates += discover_settings_pages()
+            # Last, so a site the user has bookmarked is offered as theirs
+            # rather than twice.
+            self.candidates += discover_popular_websites(self.candidates)
         except Exception as error:
             self.error_message = str(error)
         finally:
@@ -1251,6 +1256,12 @@ class MainWindow(QMainWindow):
         progress.setCancelButton(None)
         progress.setMinimumDuration(0)
         progress.setWindowModality(Qt.WindowModality.WindowModal)
+
+        # The recommended websites are a fixed list, so their favicons can be
+        # fetched while the rest of the PC is scanned and are usually there by
+        # the time the rows are drawn.
+        for _name, address, _aliases in POPULAR_WEBSITES:
+            self.icon_manager._queue_favicon_download(address)
 
         thread = ProgramDiscoveryThread(self)
         thread.finished.connect(self._on_program_discovery_finished)

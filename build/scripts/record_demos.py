@@ -140,6 +140,10 @@ def write_config(show_command_tree=False):
     settings_text = (ROOT / "config/settings.default.toml").read_text(encoding="utf-8")
     # Nothing that reaches the network or the tray during a recording.
     settings_text = settings_text.replace("check_updates_on_startup = true", "check_updates_on_startup = false")
+    # A GIF is as tall as its tallest frame, and whatever a shorter frame does
+    # not cover is blank space on the page. Three rows is enough to show a
+    # list narrowing without making every other frame pay for five.
+    settings_text = settings_text.replace("max_results = 20", "max_results = 3")
     if show_command_tree:
         settings_text = settings_text.replace("show_command_tree = false", "show_command_tree = true")
     settings_path = config / f"settings{'-tree' if show_command_tree else ''}.toml"
@@ -220,9 +224,20 @@ class Recorder:
         QTest.keyClick(widget, key, modifier or Qt.KeyboardModifier.NoModifier)
         self.frame(hold)
 
-    def clear(self, widget, hold=220):
-        widget.clear()
-        self.frame(hold)
+    def select_all(self, widget):
+        """Select what is there, so the next thing typed replaces it."""
+        from PyQt6.QtCore import Qt
+        from PyQt6.QtTest import QTest
+
+        QTest.keyClick(widget, Qt.Key.Key_A, Qt.KeyboardModifier.ControlModifier)
+
+    def retype(self, widget, text, per_char=130):
+        """Replace what is in the box, without a frame of it sitting empty."""
+        from PyQt6.QtCore import Qt
+        from PyQt6.QtTest import QTest
+
+        self.select_all(widget)
+        self.type(widget, text, per_char)
 
 
 def save_gif(frames, path, colors=255):
@@ -299,17 +314,16 @@ def scene_search(app):
     search = window.search_input_widget
     recorder = Recorder(app, window)
 
-    recorder.frame(700)
+    recorder.frame(600)
     recorder.type(search, "sp")
     recorder.hold(1100)
 
-    recorder.clear(search)
-    recorder.type(search, "gh")
+    recorder.retype(search, "gh")
     recorder.hold(1400)
 
-    recorder.clear(search)
-    # Typed in one go: a half-written expression shows "No results found",
-    # which reads as a glitch rather than as the point being made.
+    # Typed over in one go: a half-written expression shows "No results
+    # found", which reads as a glitch rather than as the point being made.
+    recorder.select_all(search)
     recorder.enter_text(search, "12*8", hold=2200)
 
     window.close()
@@ -337,17 +351,23 @@ def scene_site_search(app):
 
 
 def scene_group(app):
-    """A group: one command whose targets are other commands."""
-    window = launcher(app)
-    search = window.search_input_widget
-    recorder = Recorder(app, window)
+    """A group: one command whose targets are other commands, in order."""
+    from PyQt6.QtCore import Qt
 
-    recorder.type(search, "start", per_char=160)
-    recorder.hold(1800)
+    window = launcher(app)
+    recorder = Recorder(app, window)
 
     window.open_editor(window.cmd_manager.find_command("Start work"))
     recorder.pump(500)
-    recorder.frame(2600)
+    recorder.frame(1800)
+
+    targets = window._editor_panel.command_action.targets_box.enter_box
+    targets.setFocus()
+    recorder.frame(500)
+    recorder.type(targets, "Steam", per_char=150)
+    recorder.press(targets, Qt.Key.Key_Return, hold=100)
+    recorder.pump(500)
+    recorder.frame(2200)
 
     window.close()
     return recorder.frames
@@ -358,10 +378,7 @@ def scene_editor(app):
     from PyQt6.QtCore import Qt
 
     window = launcher(app)
-    search = window.search_input_widget
     recorder = Recorder(app, window)
-
-    recorder.enter_text(search, "gith", hold=1100)
 
     window.open_editor(window.cmd_manager.find_command("GitHub"))
     recorder.pump(400)

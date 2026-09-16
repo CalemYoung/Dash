@@ -65,35 +65,27 @@ the commands that still match, so the list shrinks as you type. Aliases work
 the same way, and an expression is worked out where you type it.
 
 <p align="left">
-   <img src="assets/launcher-search.gif" alt="Typing into Dash: s narrows to five commands and completes to Spotify, the alias gh finds GitHub, and 12*8 shows 96" width="600">
+   <img src="assets/launcher-search.gif" alt="Typing into Dash: s narrows the list and completes to Spotify, the alias gh finds GitHub, and 12*8 shows 96" width="600">
 </p>
 
 ### Search a website from the search box
 
 Give a website command an address with `{query}` in it and its name becomes a
-keyword: type the name on its own and the site opens, add a space and the rest
-of what you type is searched for.
+keyword: the name on its own opens the site, a space searches it.
 
 <p align="left">
    <img src="assets/site-search.gif" alt="Typing gh finds GitHub; a space turns the row into Search GitHub, and typing dash makes it Search GitHub for dash" width="600">
 </p>
 
-### Groups
-
-A group is a command whose targets are other commands. They open in order, so
-everything a job needs starts from one name.
-
-<p align="left">
-   <img src="assets/command-group.gif" alt="Typing start finds the Start work group, which opens in the editor with Slack, Spotify and Screenshots as the commands it opens" width="600">
-</p>
-
-### Manage commands
+### Edit a command, or build a group
 
 Press Ctrl+Enter on a result to edit it in place: name, description, type,
-target, browser, aliases and icon.
+target, browser, aliases and icon. A group is edited the same way, except its
+targets are other commands, and it opens them in the order they are listed.
 
 <p align="left">
-   <img src="assets/command-editor.gif" alt="The GitHub command open in the editor, where a second alias is typed and added as a chip" width="600">
+   <img src="assets/command-editor.gif" alt="The GitHub command open in the editor, where a second alias is typed and added as a chip" width="400">
+   <img src="assets/command-group.gif" alt="The Start work group open in the editor, where Steam is typed and added to the commands it opens" width="400">
 </p>
 
 ### Command tree
@@ -160,7 +152,9 @@ Until you have added a command, opening Dash shows two rows: "Find recommended
 commands", and the Settings command beneath it. The scan offers your installed
 programs and Store apps, common Windows tools, the Windows Settings pages
 people actually open, the folders in Explorer's Quick Access and the bookmarks
-bar of any browser it finds.
+bar of any browser it finds. It also offers the websites most people want,
+Google, YouTube, Gmail, Maps, Wikipedia and the rest, with their search links
+already filled in, so `g` opens Google and `g dash` searches it.
 
 They arrive on a tab each, for apps and tools, folders, websites and Windows
 Settings, with a filter box, so you can go through them a kind at a time. The
@@ -214,7 +208,9 @@ installer to `dist/DashSetup-<version>.exe`.
 </details>
 
 <details>
-<summary><strong>Re-record the README demos</strong></summary>
+<summary><strong>Publish a GitHub release</strong></summary>
+
+<br>
 
 Releases are built on GitHub's Windows runner. The workflow compiles the
 PyInstaller bundle with Inno Setup, verifies the installer, and attaches it to
