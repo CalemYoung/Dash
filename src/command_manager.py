@@ -6,9 +6,12 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 from urllib.parse import urlparse
 
+from .browsers import fill_query, is_search_link
 from .browsers import open_url as open_in_browser
 from .command_trie import CommandTrie
 from .icon_manager import command_source_icon_path
+from .installed_programs import _path_key, is_link_location
+from .window_switch import switch_to_running
 from .settings import Settings, toml_str, toml_value
 
 if TYPE_CHECKING:  # pragma: no cover - type hints only, keeps the GUI out of this module
@@ -35,6 +38,9 @@ def _serialize_command(cmd: dict) -> str:
     lines.append(f"aliases = {toml_value([str(alias) for alias in cmd.get('aliases', [])])}")
     lines.append(f"location = {toml_str(cmd.get('location', ''))}")
     lines.append(f"description = {toml_str(cmd.get('description', ''))}")
+    if cmd.get("type") == "group":
+        lines.append("type = 'group'")
+        lines.append(f"targets = {toml_value([str(target) for target in cmd.get('targets', [])])}")
     if cmd.get("icon"):
         lines.append(f"icon = {toml_str(cmd['icon'])}")
     if cmd.get("browser"):
@@ -58,6 +64,8 @@ class CommandManager:
         self.settings = settings
         self.commands = {}
         self.lookup_trie = CommandTrie()
+        # Every name and alias, as the trie compares them, to its command.
+        self.keyword_index: dict[str, str] = {}
         # Run counts live beside the commands file rather than in it, so that
         # launching a command never rewrites the user's command definitions.
         self.run_counts_path = command_file_path.parent / RUN_COUNTS_FILENAME
@@ -189,8 +197,9 @@ class CommandManager:
                 "type": cmd_type,
                 "location": location,
                 "times_executed": self.run_counts.get(str(name), 0),
-                "_path": Path(location).expanduser() if cmd_type == "file" else None,
+                "_path": Path(location).expanduser() if cmd_type == "file" and location else None,
                 "browser": str(cmd_data.get("browser") or "") or None,
+                "targets": [str(target) for target in cmd_data.get("targets", [])] if cmd_type == "group" else [],
                 **_recipe_fields(cmd_data),
             }
 
@@ -214,22 +223,27 @@ class CommandManager:
 
     @staticmethod
     def _command_locations(commands: list[dict]) -> set[str]:
-        return {
-            os.path.normcase(os.path.abspath(str(command.get("location", ""))))
-            for command in commands
-            if command.get("location")
-        }
+        return {_path_key(Path(str(command.get("location", "")))) for command in commands if command.get("location")}
 
     # ------------------------------------------------------------ validation
 
-    def validate_target(self, command: dict) -> str | None:
-        """Return an error if a command's location doesn't point at something real."""
+    def validate_target(self, command: dict, known_names: set[str] | None = None) -> str | None:
+        """Return an error if a command's location doesn't point at something real.
+
+        A group's targets must name existing commands; `known_names` (casefolded)
+        replaces the commands on disk when a batch is being checked.
+        """
         command_type = command.get("type", "file")
         location = str(command.get("location", "")).strip()
+        if command_type == "group":
+            return self._validate_group_targets(command, known_names)
         if command_type == "url":
             parsed = urlparse(location)
             if parsed.scheme not in ("http", "https") or not parsed.netloc:
                 return "Enter a complete http(s) website address."
+        elif is_link_location(location):
+            if command.get("command_type") == "folder":
+                return "Choose an existing folder."
         else:
             path = Path(location).expanduser()
             if not path.exists():
@@ -239,6 +253,29 @@ class CommandManager:
             if command.get("command_type") == "app" and not path.is_file():
                 return "Choose an existing file."
         return None
+
+    def _validate_group_targets(self, command: dict, known_names: set[str] | None) -> str | None:
+        targets = [str(target).strip() for target in command.get("targets", []) if str(target).strip()]
+        if not targets:
+            return "Add at least one command for the group to open."
+        if known_names is None:
+            known_names = {str(existing.get("name", "")).strip().casefold() for existing in self._read_raw_commands()}
+            known_names |= {system["name"].casefold() for system in self._get_system_commands()}
+        own_name = str(command.get("name", "")).strip().casefold()
+        for target in targets:
+            if target.casefold() == own_name:
+                return "A group can't open itself."
+            if target.casefold() not in known_names:
+                return f"'{target}' is not one of your commands."
+        return None
+
+    def find_command(self, name: str) -> dict | None:
+        """The loaded command with this name, matched without regard to case."""
+        command = self.commands.get(name)
+        if command is not None:
+            return command
+        wanted = str(name).strip().casefold()
+        return next((cmd for cmd in self.commands.values() if str(cmd.get("name", "")).casefold() == wanted), None)
 
     def _reserved_keywords(
         self,
@@ -321,6 +358,9 @@ class CommandManager:
             entry["icon"] = command["icon"]
         if command.get("browser") and entry["type"] == "url":
             entry["browser"] = command["browser"]
+        if entry["type"] == "group":
+            entry["location"] = ""
+            entry["targets"] = [str(target) for target in command.get("targets", [])]
 
         for i, existing in enumerate(commands):
             if existing.get("name") == match_name:
@@ -328,6 +368,12 @@ class CommandManager:
                 break
         else:
             commands.append(entry)
+
+        # Groups refer to commands by name, so a rename follows into them.
+        if original_name and original_name != entry["name"]:
+            for existing in commands:
+                if existing.get("type") == "group" and original_name in existing.get("targets", []):
+                    existing["targets"] = [entry["name"] if target == original_name else target for target in existing["targets"]]
 
         # A rename keeps its run count.
         if original_name and original_name != entry["name"] and original_name in self.run_counts:
@@ -360,7 +406,7 @@ class CommandManager:
         skipped: list[str] = []
 
         for candidate in candidates:
-            location = os.path.normcase(os.path.abspath(str(candidate.get("location", ""))))
+            location = _path_key(Path(str(candidate.get("location", ""))))
             if location in existing_locations:
                 skipped.append(candidate.get("name", ""))
                 continue
@@ -469,6 +515,8 @@ class CommandManager:
             }
             if cmd.get("browser"):
                 entry["browser"] = cmd["browser"]
+            if cmd_type == "group":
+                entry["targets"] = list(cmd.get("targets", []))
             portable.append(entry)
 
         blocks = [_serialize_command(cmd) for cmd in portable]
@@ -491,9 +539,8 @@ class CommandManager:
         name = str(candidate.get("name", "")).strip()
         keywords = [name, *candidate.get("aliases", [])]
         is_conflict = any(str(k).strip().casefold() in reserved for k in keywords if str(k).strip())
-        if not is_conflict and candidate.get("type", "file") != "url":
-            normalized = os.path.normcase(os.path.abspath(str(candidate.get("location", ""))))
-            is_conflict = normalized in existing_locations
+        if not is_conflict and candidate.get("type", "file") not in ("url", "group"):
+            is_conflict = _path_key(Path(str(candidate.get("location", "")))) in existing_locations
         return error, is_conflict
 
     def parse_import_candidates(self, file_path: Path) -> list[dict]:
@@ -524,6 +571,9 @@ class CommandManager:
             for key in (*ICON_RECIPE_KEYS, ICON_SOURCE_DATA_KEY, "browser"):
                 if cmd_data.get(key):
                     candidate[key] = str(cmd_data[key])
+            if cmd_type == "group":
+                candidate["location"] = ""
+                candidate["targets"] = [str(target) for target in cmd_data.get("targets", [])]
             candidate["_error"], candidate["_conflict"] = self.check_import_candidate(candidate)
             candidates.append(candidate)
 
@@ -538,9 +588,11 @@ class CommandManager:
         imported: list[str] = []
         skipped: list[str] = []
 
+        known_names = {str(command.get("name", "")).strip().casefold() for command in commands}
+        known_names |= {system["name"].casefold() for system in self._get_system_commands()}
         for candidate in candidates:
             name = str(candidate.get("name", "")).strip()
-            if self.validate_target(candidate):
+            if self.validate_target(candidate, known_names):
                 skipped.append(name)
                 continue
 
@@ -551,8 +603,8 @@ class CommandManager:
 
             location = str(candidate.get("location", ""))
             cmd_type = candidate.get("type", "file")
-            if cmd_type != "url":
-                normalized = os.path.normcase(os.path.abspath(location))
+            if cmd_type not in ("url", "group"):
+                normalized = _path_key(Path(location))
                 if normalized in existing_locations:
                     skipped.append(name)
                     continue
@@ -571,7 +623,10 @@ class CommandManager:
                 entry["icon"] = candidate["icon"]
             if candidate.get("browser") and cmd_type == "url":
                 entry["browser"] = candidate["browser"]
+            if cmd_type == "group":
+                entry["targets"] = [str(target) for target in candidate.get("targets", [])]
             commands.append(entry)
+            known_names.add(name.casefold())
             for keyword in keywords:
                 text = str(keyword).strip()
                 if text:
@@ -648,6 +703,7 @@ class CommandManager:
         self.lookup_trie = CommandTrie(case_sensitive=not self.settings.search.ignore_case)
         for keyword, command_name in keyword_to_command.items():
             self.lookup_trie.insert(keyword, command_name)
+        self.keyword_index = {self.lookup_trie.normalize(str(keyword)): name for keyword, name in keyword_to_command.items()}
 
     # -------------------------------------------------------------- searching
 
@@ -675,7 +731,30 @@ class CommandManager:
                 return (exact, -_safe_run_count(command.get("times_executed")), command["name"].lower())
             return (exact, command["name"].lower())
 
-        return sorted(results, key=order)
+        results = sorted(results, key=order)
+        search = self.match_search_keyword(text)
+        if search is not None:
+            # The search leads: typing a keyword and a space says what is wanted.
+            command, query = search
+            results = [{**command, "_query": query}, *(result for result in results if result["name"] != command["name"])]
+        return results
+
+    def match_search_keyword(self, text: str) -> tuple[dict, str] | None:
+        """``(command, query)`` when the text is a search keyword, a space,
+        and what to search for; None otherwise.
+
+        The longest keyword wins, so a command named "google search" is not
+        mistaken for "google" searching for "search". Names that merely
+        contain a space ("Remote Desktop") are not keywords and search as usual.
+        """
+        for index in range(len(text) - 1, 0, -1):
+            if text[index] != " ":
+                continue
+            keyword = self.lookup_trie.normalize(text[:index].strip())
+            command = self.commands.get(self.keyword_index.get(keyword, ""))
+            if command is not None and command.get("type") == "url" and is_search_link(command.get("location", "")):
+                return command, text[index + 1 :]
+        return None
 
     def get_matching_commands(self, main_window: "MainWindow", text):
         results = self.find_matching_commands(text)
@@ -684,8 +763,11 @@ class CommandManager:
 
     # -------------------------------------------------------------- execution
 
-    def execute_command(self, main_window: "MainWindow", name: str) -> str | None:
+    def execute_command(self, main_window: "MainWindow", name: str, query: str | None = None) -> str | None:
         """Run the command called `name`, if there is one.
+
+        `query` is the text typed after a search keyword; a search link run
+        without one opens its site's home page.
 
         Returns None on success, or a plain-language reason the launch
         failed so the caller can show it and offer a way to fix the command.
@@ -693,19 +775,31 @@ class CommandManager:
         cmd = self.commands.get(name)
         if cmd is None:
             return None
+        error = self._launch(main_window, cmd, query, {cmd["name"]})
+        # A group counts as opened even when one of its commands did not.
+        if error is None or cmd.get("type") == "group":
+            self.increment_run_count(cmd["name"])
+        return error
 
+    def _launch(self, main_window: "MainWindow", cmd: dict, query: str | None, opening: set[str]) -> str | None:
+        """Open one command; None on success, otherwise the reason it failed.
+        `opening` holds the groups being opened, so a group inside itself stops."""
         try:
             cmd_type = cmd["type"]
 
             # Handle system commands
             if cmd_type == "system":
                 self._execute_system_command(main_window, cmd["action"])
+            elif cmd_type == "group":
+                return self._launch_group(main_window, cmd, opening)
             elif cmd_type == "url":
-                self._open_url(cmd["location"], cmd.get("browser") or self.settings.general.browser)
+                location = cmd["location"]
+                if is_search_link(location):
+                    location = fill_query(location, query or "")
+                self._open_url(location, cmd.get("browser") or self.settings.general.browser)
             else:
                 self._open_file(cmd.get("_path") or cmd["location"])
             print(f"Executing: {cmd['description']}")
-            self.increment_run_count(cmd["name"])
             return None
         except FileNotFoundError as error:
             return str(error)
@@ -715,15 +809,44 @@ class CommandManager:
         except Exception as error:  # pragma: no cover - last resort
             return f"Unexpected error: {error}"
 
+    def _launch_group(self, main_window: "MainWindow", group: dict, opening: set[str]) -> str | None:
+        """Open every command in a group, in order, carrying on past failures.
+        Returns one line per command that did not open, or None."""
+        failures: list[str] = []
+        for target in group.get("targets", []):
+            command = self.find_command(target)
+            if command is None:
+                failures.append(f"{target}: there is no command with this name any more.")
+                continue
+            if command["name"] in opening:
+                failures.append(f"{command['name']}: skipped, it contains this group.")
+                continue
+            error = self._launch(main_window, command, None, opening | {command["name"]})
+            if command.get("type") == "group":
+                # Its own lines already name the commands that did not open.
+                failures.extend(error.splitlines() if error else [])
+            elif error:
+                failures.append(f"{command['name']}: {error}")
+            else:
+                self.increment_run_count(command["name"])
+        return "\n".join(failures) or None
+
     def _execute_system_command(self, main_window: "MainWindow", action: str):
         """Execute a built-in system command"""
         if action == "open_settings":
             main_window.open_settings_editor()
 
     def _open_file(self, file_path):
-        """Open a file or folder"""
+        """Open a file or folder, or a link such as a Store app or Settings page.
+        A program that is already open is brought to the front instead, when
+        the setting for that is on."""
         path = Path(file_path) if isinstance(file_path, str) else file_path
 
+        if getattr(self.settings.general, "switch_to_open_apps", False) and switch_to_running(str(path)):
+            return
+        if is_link_location(str(path)):
+            os.startfile(str(path))
+            return
         if not path.exists():
             raise FileNotFoundError(f"The target no longer exists:\n{path}")
         # Start programs in their own folder, as Explorer does. Many apps look

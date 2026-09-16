@@ -52,6 +52,9 @@ class GeneralSettings:
     launcher_screen: str = DEFAULT_SETTINGS["general"]["launcher_screen"]
     browser: str = DEFAULT_SETTINGS["general"]["browser"]
     check_updates_on_startup: bool = DEFAULT_SETTINGS["general"]["check_updates_on_startup"]
+    web_search: str = DEFAULT_SETTINGS["general"]["web_search"]
+    web_search_enabled: bool = DEFAULT_SETTINGS["general"]["web_search_enabled"]
+    switch_to_open_apps: bool = DEFAULT_SETTINGS["general"]["switch_to_open_apps"]
 
 
 @dataclass

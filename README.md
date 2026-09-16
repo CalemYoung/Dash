@@ -22,11 +22,16 @@
 ## Features
 
 - **Instant access:** Open Dash from anywhere with the global `Alt+F` hotkey.
-- **Flexible commands:** Launch applications, files, folders, and URLs from one search box.
+- **Flexible commands:** Launch applications, files, folders, websites, Store apps and Windows Settings pages from one search box.
 - **Aliases:** Add the terms you naturally type, so `gh` can open GitHub and `mail` your inbox.
-- **Quick calculations:** Evaluate mathematical expressions without opening another app.
+- **Site search:** Put `{query}` in a website's address and `gh dash` searches it, while `gh` on its own still opens the site.
+- **Groups:** One command that opens several others, in order, so a project's apps, folders and tabs start together.
+- **Already open? Switch to it:** Opening an app that is running brings its window forward rather than starting a second copy.
+- **Quick calculations:** Evaluate mathematical expressions without opening another app; Enter copies the answer.
 - **Command tree:** Optionally show a side panel that maps how each letter you type narrows the matches. Turn it on under Settings.
-- **Made to fit:** Customize commands, icons, settings, and startup behavior.
+- **Icons you pick:** Every command gets one on its own, and you can swap in a library glyph or your own image, recolour it, or go back to the one Dash found.
+- **Take it with you:** Export commands to a portable file and import them on another PC, icons and all.
+- **Made to fit:** Hotkeys, the display Dash opens on, the browser websites use, fonts, colours, the clock and startup behaviour are all settings.
 
 ## Why another launcher?
 
@@ -45,8 +50,8 @@ Dash does less on purpose:
   The same letters always narrow to the same commands, an exact name or alias
   always comes first, and the rest follow a rule you pick (alphabetical or
   most used) rather than a relevance score that shifts as you type.
-- **Nothing between you and the command.** No plugins, no web results, no
-  file search. Open, type, Enter.
+- **Nothing between you and the command.** No plugins, no file search, and no
+  web results unless you switch them on. Open, type, Enter.
 
 If you want a launcher that searches your files and the web, there are good
 ones. Dash is for when you already know what you are going to type.
@@ -55,20 +60,21 @@ ones. Dash is for when you already know what you are going to type.
 
 ### Search and launch
 
-Type a few letters and the name completes inline. Aliases work too, and
-calculations can also be done.
+Type a few letters and the name completes inline. Aliases work the same way,
+a site command searches the site once you add a space, and an expression is
+worked out where you type it.
 
 <p align="left">
-   <img src="assets/launcher-search.gif" alt="Typing into Dash: matches narrow as you type, an alias opens GitHub, and 12*8 shows a calculator result" width="600">
+   <img src="assets/launcher-search.gif" alt="Typing into Dash: s narrows to five commands and completes to Spotify, the alias gh finds GitHub, gh dash searches GitHub, and 12*8 shows 96" width="600">
 </p>
 
 ### Manage commands
 
 Press Ctrl+Enter on a result to edit it in place: name, description, type,
-target, aliases and icon.
+target, browser, aliases and icon.
 
 <p align="left">
-   <img src="assets/command-editor.gif" alt="Opening the GitHub command in the editor and adding an alias" width="420">
+   <img src="assets/command-editor.gif" alt="The GitHub command open in the editor, where a second alias is typed and added as a chip" width="420">
 </p>
 
 ### Command tree
@@ -77,8 +83,46 @@ An optional side panel that shows how each letter you type narrows the
 matches. Turn it on under Settings.
 
 <p align="left">
-   <img src="assets/command-tree.gif" alt="The command tree panel narrowing from s to spotify" width="780">
+   <img src="assets/command-tree.gif" alt="The command tree panel narrowing from s, through st, to Start work" width="780">
 </p>
+
+## Keys
+
+| Key | What it does |
+| --- | --- |
+| `Alt+F` | Open Dash from anywhere |
+| Type, then `Enter` | Open the selected command |
+| `↑` `↓` | Move through the results |
+| `Ctrl+Enter` | Edit the selected command |
+| `Ctrl+N` | Add a new command |
+| `Ctrl+,` | Open Settings |
+| `Esc` | Close Dash |
+
+The hotkey and the three `Ctrl` shortcuts are yours to change under Settings.
+
+## Beyond opening things
+
+- **Search a site.** Give a website command an address with `{query}` in it,
+  such as `https://github.com/search?q={query}`. Typing the command's name on
+  its own opens the site; typing `gh dash` after it searches for "dash".
+  Dash can also offer a web search for text nothing matched, which is off
+  until you turn it on in Settings.
+- **Group commands.** A group is a command whose targets are other commands.
+  They open in order, and one that fails does not stop the rest.
+- **Switch instead of relaunch.** If an app's window is already open, Dash
+  brings it forward rather than starting it again. Turn it off under Settings
+  if you would rather always start a fresh copy.
+- **Icons.** Every command gets an icon without you doing anything: the app's
+  own icon, the site's favicon, or a default for its kind. Click the icon in
+  the editor to replace it with one of the 5,000-odd Tabler glyphs or an image
+  from disk, and recolour either. "Use default icon" drops yours and goes back
+  to the one Dash found.
+- **Usage history.** Dash counts how often you open each command so "most used
+  first" can order the results. Show the counts, or clear the history, under
+  Settings.
+- **Move your commands.** Export any selection of commands to a portable file
+  and import it elsewhere. Paths under your home folder travel as `~`, and
+  custom icons go with them.
 
 ## Install
 
@@ -96,15 +140,22 @@ Or by hand:
     or start when you sign in.
 3. Press `Alt+F` to open Dash.
 
-Until you have added a command, opening Dash shows two rows: an offer to
-scan this PC, and the Settings command beneath it. The scan offers your
-installed programs, common Windows tools, the folders in Explorer's Quick
-Access and the bookmarks bar of any browser it finds, grouped as folders, apps
-and websites so you can tick through each. Nothing is added until you choose
-it. Run the scan again any time from Settings.
+Until you have added a command, opening Dash shows two rows: "Find recommended
+commands", and the Settings command beneath it. The scan offers your installed
+programs and Store apps, common Windows tools, the Windows Settings pages
+people actually open, the folders in Explorer's Quick Access and the bookmarks
+bar of any browser it finds.
 
-Use the system tray menu to open settings or manage commands. Dash stores your
-configuration in `%APPDATA%\Dash`, so upgrades keep your settings and commands.
+They arrive on a tab each, for apps and tools, folders, websites and Windows
+Settings, with a filter box, so you can go through them a kind at a time. The
+pencil on a row opens it in the editor first, to rename it or change its icon
+before it is added. Nothing is added until you choose it, and you can run the
+scan again any time from Settings.
+
+Settings opens from the launcher: press `Ctrl+,`, or type "settings". The
+system tray menu holds the app itself: the install and config folders, the
+update check, About and Quit. Dash stores your configuration in
+`%APPDATA%\Dash`, so upgrades keep your settings and commands.
 
 Starting Dash from the Start Menu or a shortcut opens the search bar, and if
 Dash is already running it brings up the existing copy rather than a second
@@ -143,6 +194,24 @@ Install [Inno Setup 6](https://jrsoftware.org/isinfo.php), then run:
 
 The build reads its version from `build/installer/version.txt` and writes the
 installer to `dist/DashSetup-<version>.exe`.
+
+</details>
+
+<details>
+<summary><strong>Re-record the README demos</strong></summary>
+
+<br>
+
+The GIFs above are the app itself, driven by a script: it builds a launcher on
+a throwaway config of demo commands, types into it with real key events and
+grabs a frame after each one.
+
+```powershell
+.\.venv\Scripts\python.exe build\scripts\record_demos.py
+```
+
+Pass `search`, `editor` or `tree` to redo one of them. Run it after changing
+the launcher and the demos follow, rather than showing a UI that has moved on.
 
 </details>
 

@@ -12,6 +12,15 @@ import hashlib
 import re
 
 
+def is_package_icon(icon_path) -> bool:
+    """True for an image inside a Store app's package folder, which Windows
+    renames on every update of the app."""
+    try:
+        return "\\windowsapps\\" in os.path.normcase(os.path.abspath(str(icon_path)))
+    except (OSError, TypeError, ValueError):
+        return False
+
+
 EXECUTABLE_EXTENSIONS = {".exe", ".appref-ms", ".lnk"}
 ICON_SOURCE_EXTENSIONS = {".ico", ".png", ".jpg", ".jpeg", ".svg"}
 
@@ -129,6 +138,10 @@ class IconManager:
             if icon_stem in self.bundled_icons:
                 print("Loaded named icon")
                 return self.bundled_icons[icon_stem]
+
+        # A Settings page with no icon of its own
+        if location.casefold().startswith("ms-settings:"):
+            return self.settings.paths.settings_command_icons
 
         # 4. Auto-extract from executable (Windows)
         if location.endswith(".exe") and os.path.exists(location):
@@ -338,6 +351,9 @@ class IconManager:
             if not icon.isNull():
                 return icon
 
+        if location.casefold().startswith("ms-settings:"):
+            return QIcon(self.settings.paths.settings_command_icons)
+
         if is_url:
             favicon = self._check_favicon_cache(location)
             if favicon:
@@ -379,6 +395,12 @@ class IconManager:
         is_url = cmd_type == "url" or location.startswith(("http://", "https://"))
 
         if icon_path and os.path.exists(icon_path):
+            if is_package_icon(icon_path):
+                # A Store app's logo, inside a package folder that is renamed
+                # on every update: keep a copy of our own.
+                saved = self.save_command_icon(QIcon(icon_path), command.get("name", ""))
+                if saved:
+                    return saved
             return icon_path
 
         # A recipe beats every derived icon: it is what the user chose.
@@ -388,6 +410,9 @@ class IconManager:
 
         if icon_path and icon_path in self.bundled_icons:
             return self.bundled_icons[icon_path]
+
+        if location.casefold().startswith("ms-settings:"):
+            return self.settings.paths.settings_command_icons
 
         if is_url:
             # Cache only: this runs on the GUI thread at startup, so a slow or

@@ -1,5 +1,6 @@
 import os
 from dataclasses import asdict
+from datetime import datetime
 from pathlib import Path
 from typing import Any, cast
 
@@ -217,6 +218,9 @@ class XCheckBox(QCheckBox):
     def sizeHint(self):
         return QSize(24, 24)
 
+    def hitButton(self, pos):
+        return self.rect().contains(pos)
+
     def paintEvent(self, event):
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
@@ -250,7 +254,8 @@ from .window_placement import fit_within_screen
 from .icon_browser import FRAMELESS_DIALOG, RECIPE_KEYS, DragToMoveMixin
 from .browsers import DEFAULT_BROWSER, installed_browsers
 from .command_editor import CommandEditorPanel
-from .icon_browser import OutlineIcon, glyph_pixmap
+from .icon_browser import OutlineIcon, glyph_pixmap, recipe_from_command, render_recipe
+from .windows_settings import is_settings_location
 from .widgets import ElidedLabel
 
 
@@ -288,6 +293,9 @@ def apply_edited_candidate(candidate: dict, edited: dict) -> None:
     candidate.pop("browser", None)
     if edited.get("browser"):
         candidate["browser"] = edited["browser"]
+    candidate.pop("targets", None)
+    if edited.get("type") == "group":
+        candidate["targets"] = list(edited.get("targets", []))
     new_recipe = {key: edited[key] for key in RECIPE_KEYS if edited.get(key)}
     if new_recipe or edited.get("icon"):
         for key in (*RECIPE_KEYS, "icon_source_data"):
@@ -564,6 +572,9 @@ class SettingsEditorPanel(QFrame):
                 ("Open on display", "general.launcher_screen", self._choice(general.launcher_screen, self._screen_options())),
                 ("Websites open in", "general.browser", self._choice(general.browser, browser_options(general.browser))),
                 ("Check updates at startup", "general.check_updates_on_startup", self._check(general.check_updates_on_startup)),
+                ("Switch to apps already open", "general.switch_to_open_apps", self._check(general.switch_to_open_apps)),
+                ("Web search unknown commands", "general.web_search_enabled", self._check(general.web_search_enabled)),
+                ("Search the web with", "general.web_search", self._line_edit(general.web_search)),
             ],
         )
 
@@ -697,6 +708,9 @@ class SettingsEditorPanel(QFrame):
                 launcher_screen=str(self._value("general.launcher_screen") or "mouse"),
                 browser=str(self._value("general.browser") or DEFAULT_BROWSER),
                 check_updates_on_startup=bool(self._value("general.check_updates_on_startup")),
+                web_search=str(self._value("general.web_search") or ""),
+                web_search_enabled=bool(self._value("general.web_search_enabled")),
+                switch_to_open_apps=bool(self._value("general.switch_to_open_apps")),
             ),
             ui=UISettings(
                 program_width=self._value("ui.program_width"),
@@ -772,16 +786,48 @@ class SettingsEditorPanel(QFrame):
 
 
 def candidate_kind(candidate: dict) -> str:
-    """'website', 'folder' or 'app', from what the candidate points at."""
+    """'website', 'setting', 'folder' or 'app', from what the candidate points at."""
     location = str(candidate.get("location", ""))
     if candidate.get("type") == "url" or location.startswith(("http://", "https://")):
         return "website"
+    if is_settings_location(location):
+        return "setting"
     try:
         if os.path.isdir(location):
             return "folder"
     except OSError:
         pass
     return "app"
+
+
+def usage_sort_key(candidate: dict):
+    """Most used first: by how often it was opened, then by when it was last
+    opened. What the system has no record of comes after, Windows' own
+    suggestions leading and the rest in the order they were found."""
+    opened = int(candidate.get("opened") or 0)
+    last_opened = float(candidate.get("last_opened") or 0)
+    return (not (opened or last_opened), -opened, -last_opened, not candidate.get("suggested"))
+
+
+def usage_summary(candidate: dict) -> str:
+    """The record behind a candidate's place in the list, for its row:
+    "Opened 12 times \u00b7 last 3 Sep 2026", or empty when there is none."""
+    opened = int(candidate.get("opened") or 0)
+    when = ""
+    try:
+        if candidate.get("last_opened"):
+            moment = datetime.fromtimestamp(float(candidate["last_opened"]))
+            when = f"{moment.day} {moment:%b %Y}"
+    except (OverflowError, OSError, ValueError):
+        when = ""
+    times = f"Opened {opened} time{'s' if opened != 1 else ''}" if opened else ""
+    if times and when:
+        return f"{times} \u00b7 last {when}"
+    if times:
+        return times
+    if when:
+        return f"Last opened {when}"
+    return ""
 
 
 class ProgramImportDialog(DragToMoveMixin, QDialog):
@@ -794,7 +840,7 @@ class ProgramImportDialog(DragToMoveMixin, QDialog):
     icon before it is added.
     """
 
-    KINDS = (("app", "Apps and tools"), ("folder", "Folders"), ("website", "Websites"))
+    KINDS = (("app", "Apps and tools"), ("folder", "Folders"), ("website", "Websites"), ("setting", "Windows Settings"))
 
     def __init__(
         self,
@@ -815,7 +861,9 @@ class ProgramImportDialog(DragToMoveMixin, QDialog):
 
         title = QLabel("Recommended Commands")
         title.setObjectName("dialogTitle")
-        subtitle = QLabel("Found on this PC. Tick what Dash should know about; nothing is added until you choose it.")
+        subtitle = QLabel(
+            "Found on this PC, most used first. Tick what Dash should know about; nothing is added until you choose it."
+        )
         subtitle.setObjectName("dialogSubtitle")
         subtitle.setWordWrap(True)
 
@@ -829,7 +877,7 @@ class ProgramImportDialog(DragToMoveMixin, QDialog):
             group = [c for c in selectable if candidate_kind(c) == kind]
             if not group:
                 continue
-            group.sort(key=lambda c: not c.get("suggested"))  # Windows' own suggestions lead
+            group.sort(key=usage_sort_key)
             page, list_widget, filter_box = self._build_page(kind, group)
             self.lists[kind] = list_widget
             self.filters[kind] = filter_box
@@ -907,6 +955,14 @@ class ProgramImportDialog(DragToMoveMixin, QDialog):
         self.activateWindow()
 
     def _resolve_icon(self, candidate: dict) -> QIcon:
+        # A recipe is previewed in memory. Resolving it through the icon
+        # manager would write a file named after the candidate for every row,
+        # which could overwrite the icon of a command with the same name.
+        recipe = None if candidate.get("icon") else recipe_from_command(candidate)
+        if recipe is not None:
+            pixmap = render_recipe(recipe, 64)
+            if pixmap is not None and not pixmap.isNull():
+                return QIcon(pixmap)
         if self._icon_manager is not None:
             icon = self._icon_manager.resolve_command_icon(candidate)
             if not icon.isNull():
@@ -1029,7 +1085,7 @@ class ImportRow(QWidget):
         self.setObjectName("ImportRow")
         error = candidate.get("_error")
 
-        self.check = QCheckBox()
+        self.check = XCheckBox()
         self.check.setChecked(checked and not error)
         self.check.setEnabled(not error)
 
@@ -1051,6 +1107,11 @@ class ImportRow(QWidget):
             meta = ElidedLabel("Aliases: " + ", ".join(aliases))
             meta.setObjectName("importRowMeta")
             text.addWidget(meta)
+        usage = usage_summary(candidate)
+        if usage:
+            self.usage_label = ElidedLabel(usage)
+            self.usage_label.setObjectName("importRowMeta")
+            text.addWidget(self.usage_label)
         if error:
             problem = ElidedLabel(f"\u26a0 {error}")
             problem.setObjectName("importRowError")

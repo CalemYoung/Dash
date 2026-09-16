@@ -10,6 +10,14 @@ browser = "default"
 # Look for a new release once each time Dash starts and show a single tray
 # notification if there is one. Nothing is installed until you choose to.
 check_updates_on_startup = true
+# When nothing matches, offer to search the web for what was typed. {query}
+# marks where the text goes.
+web_search = "https://www.google.com/search?q={query}"
+# Turn on to show "No results found" instead of the web search offer.
+web_search_enabled = false
+# Opening an app that is already running brings its window to the front
+# instead of starting another copy.
+switch_to_open_apps = true
 
 [ui]
 program_width = 600

@@ -99,3 +99,36 @@ def open_url(url: str, browser_key: str | None = None) -> None:
         return
     if not webbrowser.open(url):
         raise OSError(f"No web browser could be opened for {url}")
+
+
+# ------------------------------------------------------------ search links
+
+QUERY_PLACEHOLDER = "{query}"
+
+
+def is_search_link(url: str) -> bool:
+    """True for a website command that searches: its address has {query}."""
+    return QUERY_PLACEHOLDER in str(url or "")
+
+
+def fill_query(template: str, query: str) -> str:
+    """The address to open for a search link and the text typed after it.
+
+    Text after "?" or "#" is encoded as a query value (spaces become "+");
+    text in the path is encoded as a path segment, so "EC 12" stays one
+    segment. With nothing typed the site's home page opens instead of a
+    search for nothing.
+    """
+    from urllib.parse import quote, quote_plus, urlsplit
+
+    template = str(template or "")
+    query = str(query or "").strip()
+    if not is_search_link(template):
+        return template
+    if not query:
+        parts = urlsplit(template if "://" in template else "https://" + template)
+        return f"{parts.scheme}://{parts.netloc}/"
+    position = template.index(QUERY_PLACEHOLDER)
+    in_query = "?" in template[:position] or "#" in template[:position]
+    encoded = quote_plus(query) if in_query else quote(query, safe="")
+    return template.replace(QUERY_PLACEHOLDER, encoded)

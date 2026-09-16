@@ -11,6 +11,8 @@ from .icon_manager import IconManager
 from .command_trie import TrieSnapshot
 from typing import cast
 from .calculator import eval_expression
+from .browsers import fill_query, is_search_link
+from .browsers import open_url as open_in_browser
 from .icon_browser import glyph_pixmap, OutlineIcon
 from .version import current_version, is_newer_version
 from .keys import format_shortcut, key_sequences
@@ -55,14 +57,17 @@ class ProgramDiscoveryThread(QThread):
                 pythoncom_module = pythoncom
                 pythoncom_module.CoInitialize()
 
-            from .installed_programs import discover_recent_program_commands
+            from .installed_programs import discover_packaged_apps, discover_recent_program_commands
             from .personal_places import discover_bookmark_bar, discover_quick_access_folders
+            from .windows_settings import discover_settings_pages
 
             self.candidates = discover_recent_program_commands(days=365)
+            self.candidates += discover_packaged_apps()
             # The places the user already keeps. Each is best effort and
             # returns nothing rather than failing the scan.
             self.candidates += discover_quick_access_folders()
             self.candidates += discover_bookmark_bar()
+            self.candidates += discover_settings_pages()
         except Exception as error:
             self.error_message = str(error)
         finally:
@@ -1139,7 +1144,7 @@ class MainWindow(QMainWindow):
             self.hide_launcher()
             return
 
-        error = self.cmd_manager.execute_command(self, row.command_name)
+        error = self.cmd_manager.execute_command(self, row.command_name, query=row.query)
         if error:
             self._show_launch_failure(cmd, error)
             return
@@ -1150,6 +1155,50 @@ class MainWindow(QMainWindow):
         if not opens_panel:
             self.hide_launcher()
 
+    def _search_row(self, command: dict, query: str) -> "ResultRow":
+        """The row for a search keyword and what was typed after it."""
+        text = query.strip()
+        title = f"Search {command['name']} for \u201c{text}\u201d" if text else f"Search {command['name']}"
+        description = "Type what to search for, or press Enter to open the site" if not text else command.get("description", "")
+        row = ResultRow(
+            self,
+            icon_path=self.icon_manager.get_icon_path(command),
+            command=title,
+            command_name=command["name"],
+            description=description if self.settings.search.show_descriptions or not text else "",
+            editable=self.settings.search.show_edit_button,
+            query=query,
+        )
+        return row
+
+    def _show_web_search_row(self, text: str) -> bool:
+        """Offer to search the web for text nothing matched. False when the setting is off or there is nothing to search for."""
+        template = str(self.settings.general.web_search or "").strip()
+        text = text.strip()
+        if not text or not self.settings.general.web_search_enabled or not is_search_link(template):
+            return False
+
+        def search():
+            try:
+                open_in_browser(fill_query(template, text), self.settings.general.browser)
+            except OSError as error:
+                self.display_error_popup(str(error))
+                return
+            self.hide_launcher()
+
+        item = QListWidgetItem(self.results_list_widget)
+        row = ResultRow(
+            self,
+            icon_path=self.settings.paths.url_command_icon,
+            command=f"Search the web for \u201c{text}\u201d",
+            description="No commands match. Press Enter to search in your browser.",
+            action=search,
+        )
+        item.setSizeHint(row.sizeHint())
+        self.results_list_widget.setItemWidget(item, row)
+        self.results_list_widget.setCurrentRow(0)
+        return True
+
     def _show_launch_failure(self, cmd: dict, reason: str):
         """A command could not be launched: say why and offer to fix it.
 
@@ -1159,8 +1208,12 @@ class MainWindow(QMainWindow):
         message_box = QMessageBox(self)
         message_box.setWindowTitle("Dash")
         message_box.setIcon(QMessageBox.Icon.Warning)
-        message_box.setText(f"Dash couldn't open {cmd.get('name', 'this command')}.")
-        message_box.setInformativeText(f"{reason}\n\nThe target may have been moved, renamed or uninstalled.")
+        if cmd.get("type") == "group":
+            message_box.setText(f"Some of the commands in {cmd.get('name', 'this group')} didn't open.")
+            message_box.setInformativeText(reason)
+        else:
+            message_box.setText(f"Dash couldn't open {cmd.get('name', 'this command')}.")
+            message_box.setInformativeText(f"{reason}\n\nThe target may have been moved, renamed or uninstalled.")
         edit_button = None
         if cmd.get("type") != "system":
             edit_button = message_box.addButton("Edit Command", QMessageBox.ButtonRole.AcceptRole)
@@ -1228,7 +1281,12 @@ class MainWindow(QMainWindow):
         self._show_program_import_dialog(candidates)
 
     def _show_program_import_dialog(self, candidates: list[dict]):
-        from .installed_programs import discover_windows_suggestions, filter_new_program_commands, merge_program_candidates
+        from .installed_programs import (
+            discover_windows_suggestions,
+            drop_known_names,
+            filter_new_program_commands,
+            merge_program_candidates,
+        )
         from .personal_places import drop_known_websites
 
         # Suggestions lead: they are the handful of entries most people want,
@@ -1238,6 +1296,7 @@ class MainWindow(QMainWindow):
         existing_locations = self.cmd_manager.existing_command_locations()
         candidates = filter_new_program_commands(candidates, existing_locations)
         candidates = drop_known_websites(candidates, self.cmd_manager.existing_command_urls())
+        candidates = drop_known_names(candidates, set(self.cmd_manager._reserved_keywords()))
         dialog = ProgramImportDialog(candidates, existing_locations, self.icon_manager, self, command_manager=self.cmd_manager)
         if dialog.exec() != dialog.DialogCode.Accepted:
             return
@@ -1516,6 +1575,9 @@ class MainWindow(QMainWindow):
                 self.results_list_widget.setCurrentRow(0)
                 print(f"Calculator: {result}")
             except ValueError:
+                if self._show_web_search_row(self.search_input_widget.text()):
+                    self._snap_results_height()
+                    return
                 # Show "No results" message using ResultRow
                 item = QListWidgetItem(self.results_list_widget)
                 no_results_widget = ResultRow(
@@ -1535,6 +1597,12 @@ class MainWindow(QMainWindow):
             item = QListWidgetItem(self.results_list_widget)
             icon_path = self.icon_manager.get_icon_path(result)
             description = result["description"] if self.settings.search.show_descriptions else ""
+            query = result.get("_query")
+            if query is not None:
+                search_row = self._search_row(result, query)
+                item.setSizeHint(search_row.sizeHint())
+                self.results_list_widget.setItemWidget(item, search_row)
+                continue
             # Only user commands carry a counter, and only once they have been
             # used: a "0" on every row is noise rather than information.
             run_counter = ""
@@ -1623,6 +1691,7 @@ class ResultRow(QWidget):
         editable=False,
         copy_value: str | None = None,
         action=None,
+        query: str | None = None,
     ):
         # Every widget in a row is created with its parent set. A parentless
         # QWidget is a top-level window, and Qt creates a native window for it
@@ -1638,6 +1707,8 @@ class ResultRow(QWidget):
         self.copy_value = copy_value
         # Set for informational rows that do something other than run a command.
         self.action = action
+        # Set for a search keyword row: the text typed after the keyword.
+        self.query = query
 
         # Create the main horizontal layout
         row_layout = QHBoxLayout(self)
@@ -1695,9 +1766,10 @@ class ResultRow(QWidget):
         row_layout.addWidget(self.run_counter_label, 0, Qt.AlignmentFlag.AlignVCenter)
 
         self.main_window = main_window
-        # Keep the right edge straight: rows without an edit button reserve the
-        # same width so counters line up in one column.
-        if not editable:
+        # Keep the right edge straight: while edit buttons are shown, rows
+        # without one reserve the same width so counters line up in one column.
+        # With edit buttons hidden, counters sit against the right edge.
+        if not editable and main_window.settings.search.show_edit_button:
             row_layout.addSpacing(30)
         if editable:
             self.edit_button = QPushButton(self)

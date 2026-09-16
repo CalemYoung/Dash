@@ -1066,8 +1066,10 @@ class IconStudio(DragToMoveMixin, QMainWindow):
 
     accepted = pyqtSignal()
     rejected = pyqtSignal()
+    # The user wants no icon of their own: go back to the one Dash finds.
+    cleared = pyqtSignal()
 
-    def __init__(self, standalone=False, initial_path=None, initial_icon=None, initial_recipe=None):
+    def __init__(self, standalone=False, initial_path=None, initial_icon=None, initial_recipe=None, allow_clear=False):
         super().__init__()
         self._standalone = standalone
         self.setWindowTitle("Modify Icon")
@@ -1175,11 +1177,17 @@ class IconStudio(DragToMoveMixin, QMainWindow):
         self.body.addWidget(loaded)
 
         # Clear OK / Cancel actions, always visible below the body
-        buttons = QDialogButtonBox(
-            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
-        )
+        standard = QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
+        if allow_clear:
+            standard |= QDialogButtonBox.StandardButton.Reset
+        buttons = QDialogButtonBox(standard)
         buttons.accepted.connect(self._accept)
         buttons.rejected.connect(self._cancel)
+        if allow_clear:
+            reset_button = buttons.button(QDialogButtonBox.StandardButton.Reset)
+            reset_button.setText("Use default icon")
+            reset_button.setToolTip("Drop this icon and go back to the one Dash finds for the command")
+            reset_button.clicked.connect(self._clear)
         layout.addWidget(buttons)
 
         if not self._load_recipe(initial_recipe):
@@ -1221,6 +1229,12 @@ class IconStudio(DragToMoveMixin, QMainWindow):
 
     def _accept(self):
         self.accepted.emit()
+        if self._standalone:
+            QApplication.exit(0)
+        self.close()
+
+    def _clear(self):
+        self.cleared.emit()
         if self._standalone:
             QApplication.exit(0)
         self.close()

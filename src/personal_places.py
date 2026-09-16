@@ -15,6 +15,8 @@ import tempfile
 from pathlib import Path
 from urllib.parse import urlsplit
 
+from .installed_programs import note_usage
+
 # Chromium-family browsers keep a JSON "Bookmarks" file per profile. Opera
 # keeps it directly in its data folder; the rest under "User Data\<profile>".
 _CHROMIUM_STORES = (
@@ -26,6 +28,9 @@ _CHROMIUM_STORES = (
     ("Opera", "APPDATA", r"Opera Software\Opera Stable"),
     ("Opera GX", "APPDATA", r"Opera Software\Opera GX Stable"),
 )
+
+# Chromium stamps times in microseconds since 1601; POSIX counts from 1970.
+_CHROME_EPOCH_OFFSET = 11_644_473_600
 
 # Explorer's Quick Access (called Home on Windows 11): pinned and frequent folders.
 _QUICK_ACCESS = "shell:::{679f85cb-0220-4080-b29b-5540cc05aab6}"
@@ -117,11 +122,11 @@ def _read_chromium_bar(store: Path, browser: str) -> list[dict]:
     except Exception:
         return []
     entries: list[dict] = []
-    _walk_chromium(bar, [], browser, entries)
+    _walk_chromium(bar, [], browser, entries, _read_chromium_history(store.with_name("History")))
     return entries
 
 
-def _walk_chromium(node, folders: list[str], browser: str, out: list[dict], depth: int = 0):
+def _walk_chromium(node, folders: list[str], browser: str, out: list[dict], history: dict, depth: int = 0):
     if depth > 8 or not isinstance(node, dict):
         return
     for child in node.get("children") or []:
@@ -129,46 +134,102 @@ def _walk_chromium(node, folders: list[str], browser: str, out: list[dict], dept
             continue
         kind = child.get("type")
         if kind == "folder":
-            _walk_chromium(child, folders + [str(child.get("name") or "")], browser, out, depth + 1)
+            _walk_chromium(child, folders + [str(child.get("name") or "")], browser, out, history, depth + 1)
         elif kind == "url":
             entry = _bookmark_entry(child.get("name"), child.get("url"), folders, browser)
             if entry is not None:
+                # The history has visit counts; the bookmark itself only
+                # knows when it was last clicked, which will do without one.
+                visits, last_visit = history.get(url_key(entry["location"]), (0, None))
+                note_usage(entry, visits, _latest(last_visit, _chrome_time(child.get("date_last_used"))))
                 out.append(entry)
+
+
+def _read_chromium_history(store: Path) -> dict[str, tuple[int, float | None]]:
+    """Visit counts and last visits by url_key from a profile's History
+    database. Empty when there is none or it cannot be read."""
+    try:
+        if not store.is_file():
+            return {}
+    except OSError:
+        return {}
+    rows = _query_sqlite_copy(
+        store, "SELECT url, visit_count, last_visit_time FROM urls WHERE visit_count > 0 OR last_visit_time > 0"
+    )
+    history: dict[str, tuple[int, float | None]] = {}
+    for url, visits, last_visit in rows:
+        key = url_key(url)
+        old_visits, old_last = history.get(key, (0, None))
+        history[key] = (old_visits + int(visits or 0), _latest(old_last, _chrome_time(last_visit)))
+    return history
+
+
+def _chrome_time(value) -> float | None:
+    """A Chromium timestamp as POSIX seconds; None when unset or not a number."""
+    try:
+        micros = int(value)
+    except (TypeError, ValueError):
+        return None
+    if micros <= 0:
+        return None
+    return micros / 1_000_000 - _CHROME_EPOCH_OFFSET
+
+
+def _latest(*times: float | None) -> float | None:
+    known = [time for time in times if time is not None]
+    return max(known) if known else None
 
 
 # ----------------------------------------------------------------- firefox
 
 
 def _read_firefox_bar(store: Path) -> list[dict]:
-    """Firefox keeps bookmarks in SQLite and holds the file open while it
-    runs, so a copy is queried instead. The write-ahead log comes along, or
-    recent bookmarks would be missing from the copy."""
+    """Firefox keeps bookmarks in SQLite; the places table beside them has
+    each page's visit count and last visit."""
+    rows = _query_sqlite_copy(
+        store,
+        """
+        WITH RECURSIVE bar(id, path) AS (
+            SELECT id, '' FROM moz_bookmarks WHERE guid = 'toolbar_____'
+            UNION ALL
+            SELECT b.id, CASE WHEN bar.path = '' THEN b.title ELSE bar.path || '/' || b.title END
+            FROM moz_bookmarks b JOIN bar ON b.parent = bar.id WHERE b.type = 2
+        )
+        SELECT b.title, p.url, bar.path, p.visit_count, p.last_visit_date
+        FROM moz_bookmarks b
+        JOIN bar ON b.parent = bar.id
+        JOIN moz_places p ON p.id = b.fk
+        WHERE b.type = 1
+        ORDER BY bar.path, b.position
+        """,
+    )
+    entries: list[dict] = []
+    for title, url, path, visits, last_visit in rows:
+        folders = [part for part in str(path or "").split("/") if part]
+        entry = _bookmark_entry(title, url, folders, "Firefox")
+        if entry is not None:
+            # Firefox stamps microseconds since 1970.
+            note_usage(entry, int(visits or 0), last_visit / 1_000_000 if last_visit else None)
+            entries.append(entry)
+    return entries
+
+
+def _query_sqlite_copy(store: Path, query: str) -> list[tuple]:
+    """Run a query against a copy of a browser database: browsers hold their
+    files open while they run. The write-ahead log comes along when there is
+    one, or the newest rows would be missing from the copy. Any trouble
+    reading gives no rows, never an error."""
     temp_dir = None
     try:
-        temp_dir = tempfile.mkdtemp(prefix="dash-places-")
-        copy = Path(temp_dir) / "places.sqlite"
+        temp_dir = tempfile.mkdtemp(prefix="dash-browser-")
+        copy = Path(temp_dir) / store.name
         shutil.copy2(store, copy)
         wal = store.with_name(store.name + "-wal")
         if wal.exists():
             shutil.copy2(wal, copy.with_name(copy.name + "-wal"))
         connection = sqlite3.connect(f"file:{copy}?mode=ro", uri=True)
         try:
-            rows = connection.execute(
-                """
-                WITH RECURSIVE bar(id, path) AS (
-                    SELECT id, '' FROM moz_bookmarks WHERE guid = 'toolbar_____'
-                    UNION ALL
-                    SELECT b.id, CASE WHEN bar.path = '' THEN b.title ELSE bar.path || '/' || b.title END
-                    FROM moz_bookmarks b JOIN bar ON b.parent = bar.id WHERE b.type = 2
-                )
-                SELECT b.title, p.url, bar.path
-                FROM moz_bookmarks b
-                JOIN bar ON b.parent = bar.id
-                JOIN moz_places p ON p.id = b.fk
-                WHERE b.type = 1
-                ORDER BY bar.path, b.position
-                """
-            ).fetchall()
+            return connection.execute(query).fetchall()
         finally:
             connection.close()
     except Exception:
@@ -176,13 +237,6 @@ def _read_firefox_bar(store: Path) -> list[dict]:
     finally:
         if temp_dir:
             shutil.rmtree(temp_dir, ignore_errors=True)
-    entries: list[dict] = []
-    for title, url, path in rows:
-        folders = [part for part in str(path or "").split("/") if part]
-        entry = _bookmark_entry(title, url, folders, "Firefox")
-        if entry is not None:
-            entries.append(entry)
-    return entries
 
 
 # ------------------------------------------------------------------ shared

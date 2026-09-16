@@ -1,5 +1,8 @@
+import codecs
 import ctypes
 import os
+import re
+import struct
 import sys
 from pathlib import Path
 
@@ -15,6 +18,21 @@ START_MENU_DIRS = [
 ]
 
 APP_PATHS_ROOT = r"Software\Microsoft\Windows\CurrentVersion\App Paths"
+
+# Explorer's tally of what was started through it (UserAssist): one key for
+# executables, one for shortcuts. Value names are ROT13-encoded paths, often
+# with a known-folder GUID standing in for the folder.
+USER_ASSIST_ROOT = r"Software\Microsoft\Windows\CurrentVersion\Explorer\UserAssist"
+USER_ASSIST_KEYS = ("{CEBFF5CD-ACE2-4F4F-9178-9926F41749EA}", "{F4E57C4B-2036-45F0-A9AB-443BCFE33D9F}")
+_FILETIME_UNIX_EPOCH = 116_444_736_000_000_000  # 1970-01-01 in 100 ns ticks since 1601
+
+# The shell folder listing every Start Menu entry, Store (MSIX) apps included.
+# A Store app has no shortcut on disk and is started by its app id, so its
+# command location is "shell:AppsFolder\<app id>" rather than a path.
+APPS_FOLDER = "shell:AppsFolder"
+# Windows' own inbox components (Settings, Get Started, Click to Do...) are
+# signed by this publisher; they are not apps anyone adds a command for.
+_WINDOWS_COMPONENT_PUBLISHER = "cw5n1h2txyewy"
 
 FRIENDLY_EXE_NAMES = {
     "excel": "Excel",
@@ -124,6 +142,7 @@ def discover_windows_suggestions() -> list[dict]:
 
     suggestions: list[dict] = []
     seen: set[str] = set()
+    usage = program_usage()
 
     for name, folder_id, aliases in SUGGESTED_FOLDERS:
         path = _known_folder_path(folder_id)
@@ -143,7 +162,9 @@ def discover_windows_suggestions() -> list[dict]:
         if key in seen:
             continue
         seen.add(key)
-        suggestions.append(_suggestion(name, path, aliases, description))
+        suggestion = _suggestion(name, path, aliases, description)
+        note_usage(suggestion, *usage.get(key, (0, None)))
+        suggestions.append(suggestion)
 
     return suggestions
 
@@ -276,22 +297,59 @@ def discover_recent_program_commands(days: int = 365, max_commands: int | None =
     except Exception:
         shortcut_shell = None
 
+    usage = program_usage()
+
     if shortcut_shell is not None:
         for shortcut_path in _start_menu_shortcuts():
             target_path = _shortcut_target(shortcut_path, shortcut_shell)
             _add_program_command(
-                commands, seen_locations, seen_names, _command_name(shortcut_path.stem), target_path, from_registry=False
+                commands,
+                seen_locations,
+                seen_names,
+                _command_name(shortcut_path.stem),
+                target_path,
+                from_registry=False,
+                usage=usage,
+                shortcut_path=shortcut_path,
             )
 
     for exe_name, target_path in _app_paths_registry_targets():
         _add_program_command(
-            commands, seen_locations, seen_names, _command_name_for_exe(exe_name), target_path, from_registry=True
+            commands,
+            seen_locations,
+            seen_names,
+            _command_name_for_exe(exe_name),
+            target_path,
+            from_registry=True,
+            usage=usage,
         )
 
     commands = sorted(commands, key=lambda command: command["name"].casefold())
     if max_commands is not None:
         return commands[:max_commands]
     return commands
+
+
+def drop_known_names(candidates: list[dict], known_keywords: set[str]) -> list[dict]:
+    """Leave out candidates named like a command that already exists.
+
+    Location alone misses the same program kept in two places: a Start Menu
+    shortcut to a copy on a network share, and a command for a local copy.
+    A candidate whose name is already a command name or alias could not be
+    added under that name anyway. `known_keywords` are casefolded.
+    """
+    kept = []
+    for candidate in candidates:
+        if str(candidate.get("name", "")).strip().casefold() in known_keywords:
+            continue
+        aliases = candidate.get("aliases") or []
+        free = [alias for alias in aliases if str(alias).strip().casefold() not in known_keywords]
+        if len(free) != len(aliases):
+            # An alias another command already has would stop the whole
+            # recommendation being added; offer it without that alias.
+            candidate = {**candidate, "aliases": free}
+        kept.append(candidate)
+    return kept
 
 
 def filter_new_program_commands(candidates: list[dict], existing_locations: set[str]) -> list[dict]:
@@ -310,9 +368,13 @@ def _add_program_command(
     name: str,
     target_path: Path | None,
     from_registry: bool = False,
+    usage: dict[str, tuple[int, float | None]] | None = None,
+    shortcut_path: Path | None = None,
 ):
     if target_path is None or target_path.suffix.lower() != ".exe":
         return
+    if _in_package_folder(target_path):
+        return  # a Store app: offered by app id from the Applications folder instead
 
     target_key = _path_key(target_path)
     if target_key in seen_locations:
@@ -327,15 +389,222 @@ def _add_program_command(
 
     seen_locations.add(target_key)
     seen_names.add(name.casefold())
-    commands.append(
-        {
+    command = {
+        "name": name,
+        "aliases": [],
+        "location": str(target_path),
+        "description": f"Opens {name}",
+        "type": "file",
+    }
+    if usage:
+        # Starting a program from its Start Menu entry is recorded against
+        # the shortcut, starting it any other way against the executable.
+        records = [usage.get(target_key)]
+        if shortcut_path is not None:
+            records.append(usage.get(_path_key(shortcut_path)))
+        note_usage(command, *_combine_usage(*(record for record in records if record)))
+    commands.append(command)
+
+
+def program_usage() -> dict[str, tuple[int, float | None]]:
+    """How often and when the shell last started each program and shortcut,
+    by path key: (times opened, last opened as a POSIX timestamp or None).
+
+    Recent Windows 11 builds no longer keep the count, so it is usually 0
+    and only the time says anything. Entries that are not paths (Store
+    apps, session bookkeeping) are left out.
+    """
+    usage: dict[str, tuple[int, float | None]] = {}
+    if winreg is None:
+        return usage
+    folders: dict[str, Path | None] = {}
+    for key_name in USER_ASSIST_KEYS:
+        try:
+            key = winreg.OpenKey(winreg.HKEY_CURRENT_USER, rf"{USER_ASSIST_ROOT}\{key_name}\Count")
+        except OSError:
+            continue
+        with key:
+            index = 0
+            while True:
+                try:
+                    name, data, _value_type = winreg.EnumValue(key, index)
+                except OSError:
+                    break
+                index += 1
+                entry = _usage_entry(name, data, folders)
+                if entry is None:
+                    continue
+                path_key, opened, last_opened = entry
+                usage[path_key] = _combine_usage(usage.get(path_key, (0, None)), (opened, last_opened))
+    return usage
+
+
+def _usage_entry(name, data, folders: dict[str, Path | None]) -> tuple[str, int, float | None] | None:
+    """One UserAssist value as (key, times opened, last opened), or None for
+    a value that is not about a program or holds no record. The key is the
+    path key of a program or shortcut, or the app id of a Store app."""
+    if not isinstance(data, bytes) or len(data) < 68:
+        return None
+    text = codecs.decode(str(name), "rot13")
+    path = _usage_path(text, folders)
+    if path is not None:
+        key = _path_key(path)
+    elif "!" in text and "\\" not in text:
+        key = app_id_key(text)
+    else:
+        return None
+    opened = struct.unpack_from("<I", data, 4)[0]
+    ticks = struct.unpack_from("<Q", data, 60)[0]
+    last_opened = (ticks - _FILETIME_UNIX_EPOCH) / 10_000_000 if ticks > _FILETIME_UNIX_EPOCH else None
+    if not opened and last_opened is None:
+        return None
+    return key, opened, last_opened
+
+
+def _usage_path(text: str, folders: dict[str, Path | None]) -> Path | None:
+    """The path a UserAssist value names, with a known-folder GUID resolved.
+    `folders` caches the resolutions across values."""
+    if "\\" not in text:
+        return None
+    if not text.startswith("{"):
+        return Path(text)
+    guid, closing, rest = text.partition("}")
+    if not closing:
+        return None
+    guid += closing
+    if guid not in folders:
+        folders[guid] = _known_folder_path(guid)
+    folder = folders[guid]
+    if folder is None:
+        return None
+    return folder / rest.lstrip("\\")
+
+
+def _combine_usage(*records: tuple[int, float | None]) -> tuple[int, float | None]:
+    """Several records of the same thing: the highest count, the latest time."""
+    opened = 0
+    last_opened = None
+    for count, when in records:
+        opened = max(opened, count)
+        if when is not None and (last_opened is None or when > last_opened):
+            last_opened = when
+    return opened, last_opened
+
+
+def note_usage(candidate: dict, opened: int, last_opened: float | None) -> None:
+    """Record on an import candidate how often and when it was opened, so
+    the import dialog can put the most used first. Nothing is written when
+    there is no record; these keys never reach commands.toml."""
+    if opened:
+        candidate["opened"] = int(opened)
+    if last_opened is not None:
+        candidate["last_opened"] = float(last_opened)
+
+
+def discover_packaged_apps() -> list[dict]:
+    """Commands for the Store (MSIX) apps on the Start Menu: Claude, Terminal,
+    Snipping Tool and the like.
+
+    They have no shortcut on disk, so the Start Menu scan never sees them;
+    the shell's Applications folder lists them, and they start by app id.
+    The icon offered is the app's own logo inside its package folder. Needs
+    COM initialised on the calling thread; returns nothing rather than fail.
+    """
+    if sys.platform != "win32":
+        return []
+    try:
+        import win32com.client
+
+        folder = win32com.client.Dispatch("Shell.Application").NameSpace(APPS_FOLDER)
+        items = list(folder.Items()) if folder is not None else []
+    except Exception:
+        return []
+
+    usage = program_usage()
+    commands: list[dict] = []
+    seen: set[str] = set()
+    for item in items:
+        try:
+            package = str(item.ExtendedProperty("System.AppUserModel.PackageFullName") or "")
+            if not package or item.ExtendedProperty("System.Link.TargetParsingPath"):
+                continue  # a desktop app: the Start Menu scan has it, with its path
+            app_id = str(item.Path or "").strip()
+            name = str(item.Name or "").strip()
+            install_path = str(item.ExtendedProperty("System.AppUserModel.PackageInstallPath") or "")
+            logo = str(item.ExtendedProperty("System.Tile.SmallLogoPath") or "")
+        except Exception:
+            continue
+        if not app_id or not name or "!" not in app_id or app_id_key(app_id) in seen:
+            continue
+        if package.endswith("_" + _WINDOWS_COMPONENT_PUBLISHER):
+            continue
+        seen.add(app_id_key(app_id))
+        command = {
             "name": name,
             "aliases": [],
-            "location": str(target_path),
+            "location": f"{APPS_FOLDER}\\{app_id}",
             "description": f"Opens {name}",
             "type": "file",
         }
-    )
+        icon = packaged_app_logo(Path(install_path), logo) if install_path and logo else None
+        if icon is not None:
+            command["icon"] = str(icon)
+        note_usage(command, *usage.get(app_id_key(app_id), (0, None)))
+        commands.append(command)
+    return sorted(commands, key=lambda command: command["name"].casefold())
+
+
+def packaged_app_logo(install_path: Path, logo: str) -> Path | None:
+    """The best file for a Store app's logo: the manifest names one image,
+    the package ships it in several sizes, and often not the plain one."""
+    if not logo or logo.startswith("ms-resource:"):
+        return None
+    wanted = install_path / logo
+    try:
+        variants = [path for path in wanted.parent.glob(f"{wanted.stem}*{wanted.suffix}") if path.is_file()]
+    except OSError:
+        return None
+    return max(variants, key=_logo_rank, default=None)
+
+
+def _logo_rank(path: Path) -> tuple[int, int]:
+    """Bigger first; at the same size, the version without a tile behind it."""
+    name = path.name.casefold()
+    target = re.search(r"targetsize-(\d+)", name)
+    scale = re.search(r"scale-(\d+)", name)
+    if target:
+        size = int(target.group(1))
+    elif scale:
+        size = 44 * int(scale.group(1)) // 100
+    else:
+        size = 44
+    return size, int("altform-unplated" in name)
+
+
+# A scheme of two or more letters: "ms-settings:display", "shell:startup".
+# One letter is a drive ("C:\Tools"), which is a path, not a link.
+_LINK_SCHEME = re.compile(r"^[A-Za-z][A-Za-z0-9+.\-]+:")
+
+
+def is_link_location(location: str) -> bool:
+    """True for a command that Windows opens as a link rather than a path:
+    a Store app by app id, a Settings page, a shell folder. Web addresses
+    are website commands and are not counted here."""
+    text = str(location).strip()
+    return bool(_LINK_SCHEME.match(text)) and not text.casefold().startswith(("http://", "https://"))
+
+
+def is_app_id_location(location: str) -> bool:
+    """True for a link that starts a Store app by its app id."""
+    return str(location).strip().casefold().startswith(APPS_FOLDER.casefold() + "\\")
+
+
+def app_id_key(app_id: str) -> str:
+    return app_id.strip().casefold()
+
+
+def _in_package_folder(path: Path) -> bool:
+    return "\\windowsapps\\" in os.path.normcase(os.path.abspath(os.fspath(path))) + "\\"
 
 
 def _start_menu_shortcuts() -> list[Path]:
@@ -440,7 +709,10 @@ def _existing_exe_path(value: str) -> Path | None:
 
 
 def _path_key(path: Path) -> str:
-    return os.path.normcase(os.path.abspath(os.fspath(path)))
+    text = os.fspath(path)
+    if is_link_location(text):
+        return os.path.normcase(text.strip())
+    return os.path.normcase(os.path.abspath(text))
 
 
 def _command_name(name: str) -> str:
@@ -456,3 +728,30 @@ def _command_name_for_exe(exe_name: str) -> str:
     if friendly_name:
         return friendly_name
     return _command_name(stem)
+
+
+def command_name_for_link(location: str) -> str:
+    """A name for a link location: a Settings page by its listed name, a
+    Store app by the name in its app id ("Claude" for
+    "Claude_pzs8sxrjxfjjc!Claude", "WindowsTerminal" for
+    "Microsoft.WindowsTerminal_8wekyb3d8bbwe!App"), a shell folder by its
+    own name ("startup")."""
+    from .windows_settings import is_settings_location, settings_page_name
+
+    if is_settings_location(location):
+        return settings_page_name(location)
+    text = str(location).strip()
+    if is_app_id_location(text):
+        app_id = text.split("\\", 1)[1]
+        package, _, entry = app_id.partition("!")
+        if entry and entry.casefold() != "app":
+            return entry
+        return package.split("_", 1)[0].rsplit(".", 1)[-1]
+    return text.split(":", 1)[1].strip("\\/ ") or text
+
+
+def command_name_for_target(path: Path) -> str:
+    """The name a command for this file, shortcut or folder would get:
+    the file name without its extension, known programs by their friendly
+    name, and " - Shortcut" dropped from a shortcut. Empty for a drive root."""
+    return _command_name_for_exe(path.name)
