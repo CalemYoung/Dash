@@ -103,7 +103,8 @@ matches. Turn it on under Settings.
 | --- | --- |
 | `Alt+F` | Open Dash from anywhere |
 | Type, then `Enter` | Open the selected command |
-| `↑` `↓` | Move through the results |
+| `↑` `↓` | Move through the results; the search box completes to the selected one |
+| `Tab` | Fill in the selected command's name or alias; a search keyword also gets its space, ready for the search text |
 | `Ctrl+Enter` | Edit the selected command |
 | `Ctrl+N` | Add a new command |
 | `Ctrl+,` | Open Settings |

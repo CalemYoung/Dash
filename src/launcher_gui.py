@@ -548,6 +548,11 @@ class MainWindow(QMainWindow):
     def eventFilter(self, obj, event):
         """Catch key presses on the input box"""
         if obj == self.search_input_widget and event.type() == event.Type.KeyPress:
+            # Tab completes in the box; it never moves focus out of it.
+            if event.key() in (Qt.Key.Key_Tab, Qt.Key.Key_Backtab):
+                if event.key() == Qt.Key.Key_Tab:
+                    self.accept_suggestion()
+                return True
             # Check if user is deleting
             if event.key() in (Qt.Key.Key_Backspace, Qt.Key.Key_Delete):
                 self.is_deleting = True
@@ -1102,20 +1107,56 @@ class MainWindow(QMainWindow):
             return full_text[: -len(selected)]
         return full_text
 
-    def _try_apply_suggestion(self, suggestion):
-        """Apply autocomplete suggestion if it matches user input"""
-        if not suggestion.lower().startswith(self.user_text.lower()):
+    def _try_apply_suggestion(self, command_name):
+        """Show the rest of the selected command's matching name or alias in blue."""
+        keyword = self.cmd_manager.completion_keyword(command_name, self.user_text)
+        if keyword is None:
             self.current_suggestion = ""
+            # Drop a completion left over from a row that no longer applies.
+            if self.search_input_widget.text() != self.user_text:
+                self.search_input_widget.blockSignals(True)
+                self.search_input_widget.setText(self.user_text)
+                self.search_input_widget.blockSignals(False)
             return
 
-        completion = suggestion[len(self.user_text) :].lower()
+        completion = keyword[len(self.user_text) :].lower()
 
         self.search_input_widget.blockSignals(True)
         self.search_input_widget.setText(self.user_text + completion)
         self.search_input_widget.setSelection(len(self.user_text), len(completion))
         self.search_input_widget.blockSignals(False)
 
-        self.current_suggestion = suggestion
+        self.current_suggestion = keyword
+
+    def _follow_selection(self):
+        """Complete the box from the row the user moved to, keeping what they typed."""
+        if not self.settings.search.autocomplete or not self.user_text:
+            return
+        self._try_apply_suggestion(self.get_selected_command())
+
+    def accept_suggestion(self):
+        """Tab: fill in the selected command's name or alias, blue part or not.
+        A search keyword also gets the space that starts a search, so what to
+        search for can be typed straight away. Focus stays in the box."""
+        box = self.search_input_widget
+        typed = self.user_text if box.hasSelectedText() else box.text()
+        name = self.get_selected_command()
+        keyword = self.cmd_manager.completion_keyword(name, typed)
+        if keyword is None:
+            # Nothing to complete (a search already under way, a calculator row): leave the text alone.
+            box.deselect()
+            box.setCursorPosition(len(box.text()))
+            return
+        text = typed + keyword[len(typed) :].lower()
+        command = self.cmd_manager.commands[name]
+        if command.get("type") == "url" and is_search_link(command.get("location", "")):
+            text += " "
+        box.blockSignals(True)
+        box.setText(text)
+        box.setCursorPosition(len(text))
+        box.blockSignals(False)
+        self.is_deleting = False
+        self._update_without_suggestion(text)
 
     def _update_without_suggestion(self, text):
         """Update state without applying autocomplete"""
@@ -1513,8 +1554,10 @@ class MainWindow(QMainWindow):
             self.hide_launcher()
         elif event.key() == Qt.Key.Key_Down and count > 0:
             self.results_list_widget.setCurrentRow((row + 1) % count)
+            self._follow_selection()
         elif event.key() == Qt.Key.Key_Up and count > 0:
             self.results_list_widget.setCurrentRow((row - 1) % count)
+            self._follow_selection()
         else:
             super().keyPressEvent(event)
 

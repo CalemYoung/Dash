@@ -713,6 +713,25 @@ class CommandManager:
         wanted = normalize(text)
         return any(normalize(str(keyword)) == wanted for keyword in (command.get("name", ""), *command.get("aliases", [])))
 
+    def completion_keyword(self, name: str | None, text: str) -> str | None:
+        """The name or alias of command `name` that `text` is the start of.
+
+        Results match on aliases as well as names, so the completion has to
+        come from whichever one matched: "se" completes Dash Settings through
+        its alias "settings". The name wins when both fit. None when nothing fits.
+        """
+        command = self.commands.get(name) if name else None
+        if command is None or not text:
+            return None
+        normalize = self.lookup_trie.normalize
+        wanted = normalize(text)
+        # The keyword index holds every name and alias, built-in commands included.
+        aliases = [keyword for keyword, owner in self.keyword_index.items() if owner == name]
+        for keyword in (str(command.get("name", "")), *aliases):
+            if keyword and normalize(keyword).startswith(wanted):
+                return keyword
+        return None
+
     def find_matching_commands(self, text: str) -> list[dict]:
         """Return the commands whose name or alias starts with `text`.
 
