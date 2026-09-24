@@ -1,15 +1,18 @@
+import logging
 import os
 import sys
-import win32gui
-import win32ui
-import win32con
-import win32api
 from pathlib import Path
 from threading import Lock, Thread
 from queue import Queue
 import time
 import hashlib
 import re
+
+log = logging.getLogger(__name__)
+
+# Favicons are small; anything bigger than this is not an icon and is not
+# worth holding in memory.
+MAX_FAVICON_BYTES = 1024 * 1024
 
 
 def is_package_icon(icon_path) -> bool:
@@ -35,10 +38,25 @@ def get_user_icon_dir():
     return app_data
 
 
-def command_icon_stem(command_name) -> str:
-    """File-safe stem for a command's icon files."""
+def legacy_command_icon_stem(command_name) -> str:
+    """The stem icon files were saved under before it carried a hash.
+
+    "a b" and "a_b" both became "a_b" here, so two commands could overwrite
+    each other's icon. Kept to find icons saved by earlier versions.
+    """
     stem = re.sub(r"[^A-Za-z0-9._-]+", "_", str(command_name).strip()).strip("._")
     return stem or "command"
+
+
+def command_icon_stem(command_name) -> str:
+    """File-safe stem for a command's icon files.
+
+    The readable part is followed by a short hash of the exact name, so
+    names that clean up to the same text ("a b", "a_b", "A B") still get
+    files of their own.
+    """
+    name_hash = hashlib.sha1(str(command_name).strip().encode("utf-8")).hexdigest()[:8]
+    return f"{legacy_command_icon_stem(command_name)}-{name_hash}"
 
 
 def command_source_icon_path(command_name) -> Path:
@@ -48,6 +66,19 @@ def command_source_icon_path(command_name) -> Path:
     re-edited later; library glyphs need no source file.
     """
     return get_user_icon_dir() / f"{command_icon_stem(command_name)}.source.png"
+
+
+def _existing_or_legacy(path: Path, legacy: Path) -> Path:
+    """`path`, unless only the file an earlier version saved exists."""
+    if not path.exists() and legacy.exists():
+        return legacy
+    return path
+
+
+def existing_command_source_icon_path(command_name) -> Path:
+    """Where to read a command's source artwork, including older files."""
+    legacy = get_user_icon_dir() / f"{legacy_command_icon_stem(command_name)}.source.png"
+    return _existing_or_legacy(command_source_icon_path(command_name), legacy)
 
 
 # Second-level labels that are public suffixes with a two-letter country code,
@@ -119,24 +150,24 @@ class IconManager:
         # Priority order:
         # 1. Absolute path to custom icon
         if icon and os.path.isabs(icon) and os.path.exists(icon):
-            print("Loaded path specified icon1")
+            log.debug("Icon from path: %s", icon)
             return icon
 
         # 2. Relative path that exists
         if icon and os.path.exists(icon):
-            print("Loaded path specified icon2")
+            log.debug("Icon from relative path: %s", icon)
             return icon
 
         # 3. Bundled icon by name (e.g., "settings" finds "settings.png")
         if icon:
             # Try the icon name directly
             if icon in self.bundled_icons:
-                print("Loaded named icon")
+                log.debug("Bundled icon %s", icon)
                 return self.bundled_icons[icon]
             # Try without extension
             icon_stem = Path(icon).stem
             if icon_stem in self.bundled_icons:
-                print("Loaded named icon")
+                log.debug("Bundled icon %s", icon)
                 return self.bundled_icons[icon_stem]
 
         # A Settings page with no icon of its own
@@ -147,14 +178,14 @@ class IconManager:
         if location.endswith(".exe") and os.path.exists(location):
             extracted = self._extract_exe_icon(location)
             if extracted:
-                print("Loaded extracted exe icon")
+                log.debug("Icon extracted from %s", location)
                 return extracted
 
         # 5. Auto-download favicon for URLs (check cache first, download later if needed)
         if is_url:
             cached_favicon = self._check_favicon_cache(location)
             if cached_favicon:
-                print("Loaded favicon icon")
+                log.debug("Favicon from cache for %s", location)
                 return cached_favicon
             else:
                 # Queue for background download, return default for now
@@ -163,22 +194,38 @@ class IconManager:
 
         # 6. Shared defaults for local folders and regular files
         if location and os.path.isdir(location):
-            print("Loaded folder icon")
+            log.debug("Folder icon for %s", location)
             return self.settings.paths.folder_icon
 
         if location and os.path.exists(location):
-            print("Loaded file icon")
+            log.debug("File icon for %s", location)
             return self.settings.paths.file_icon
 
         # 7. Default fallback
-        print("Loaded default icon")
+        log.debug("Default icon for %s", location)
         return self.settings.paths.default_command_icon
 
     def command_icon_path(self, command_name):
+        """Where a command's rendered icon is written."""
         return self.icon_store_dir / f"{command_icon_stem(command_name)}.png"
+
+    def existing_command_icon_path(self, command_name):
+        """Where to read a command's rendered icon: the current file, or the
+        one an earlier version saved under the stem without a hash."""
+        legacy = self.icon_store_dir / f"{legacy_command_icon_stem(command_name)}.png"
+        return _existing_or_legacy(self.command_icon_path(command_name), legacy)
 
     def command_source_icon_path(self, command_name):
         return command_source_icon_path(command_name)
+
+    def existing_command_source_icon_path(self, command_name):
+        return existing_command_source_icon_path(command_name)
+
+    @property
+    def favicons_enabled(self) -> bool:
+        """False when the user turned favicon downloads off in Settings."""
+        general = getattr(self.settings, "general", None)
+        return bool(getattr(general, "download_favicons", True))
 
     def render_recipe_icon(self, command):
         """Render a command's icon recipe to its icon file, returning the path.
@@ -501,6 +548,12 @@ class IconManager:
                 if cache_mtime > exe_mtime:
                     return str(cache_path)
 
+            # Imported here so the module loads (and can be tested) off Windows.
+            import win32api
+            import win32con
+            import win32gui
+            import win32ui
+
             # Extract icon from exe
             ico_x = win32api.GetSystemMetrics(win32con.SM_CXICON)
             ico_y = win32api.GetSystemMetrics(win32con.SM_CYICON)
@@ -550,7 +603,7 @@ class IconManager:
             return str(cache_path)
 
         except Exception as e:
-            print(f"Failed to extract icon from {exe_path}: {e}")
+            log.warning("Could not extract the icon from %s: %s", exe_path, e)
             return None
 
     def _load_bundled_icons(self):
@@ -600,8 +653,16 @@ class IconManager:
                     return None
                 return str(cache_path), max(cached.width(), cached.height())
 
+            if not self.favicons_enabled:
+                return None
+
             with urlopen(url, timeout=self.FAVICON_TIMEOUT) as response:
-                image_data = response.read()
+                declared = response.headers.get("Content-Length") if response.headers else None
+                if declared and declared.strip().isdigit() and int(declared) > MAX_FAVICON_BYTES:
+                    return None
+                image_data = response.read(MAX_FAVICON_BYTES + 1)
+            if len(image_data) > MAX_FAVICON_BYTES:
+                return None
 
             image = self._largest_frame(image_data)
             if image is None or not image.save(str(cache_path), "PNG"):
@@ -612,7 +673,7 @@ class IconManager:
             return None
         except Exception as e:
             # Only print unexpected errors
-            print(f"Unexpected error downloading icon from {url}: {e}")
+            log.warning("Unexpected error downloading an icon from %s: %s", url, e)
             return None
 
     def _largest_frame(self, image_data):
@@ -716,7 +777,10 @@ class IconManager:
 
     def _queue_favicon_download(self, url):
         """Queue a favicon for background download, unless it is already in
-        flight or was tried recently and found nothing."""
+        flight or was tried recently and found nothing. Does nothing when
+        favicon downloads are turned off in Settings."""
+        if not self.favicons_enabled:
+            return
         with self._favicon_lock:
             if url in self._favicon_pending:
                 return
@@ -737,7 +801,7 @@ class IconManager:
                 try:
                     self._get_favicon_for_url(url)
                 except Exception:
-                    pass  # Silent fail
+                    log.debug("Favicon download failed for %s", url, exc_info=True)
                 finally:
                     with self._favicon_lock:
                         self._favicon_pending.discard(url)
