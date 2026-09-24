@@ -182,18 +182,20 @@ class ColorButton(QPushButton):
 
     def __init__(self, value, parent=None):
         super().__init__(parent)
-        color = QColor(str(value))
-        self._color = color if color.isValid() else QColor(Qt.GlobalColor.white)
+        # An empty value means "follow the theme"; it stays empty until a
+        # colour is actually picked, so opening Settings changes nothing.
+        color = QColor(str(value)) if str(value).strip() else QColor()
+        self._color = color if color.isValid() else None
         self.setCursor(Qt.CursorShape.PointingHandCursor)
         self.setMinimumWidth(84)
         self.clicked.connect(self._choose_color)
         self._update_swatch()
 
     def color(self) -> str:
-        return self._color.name(QColor.NameFormat.HexRgb)
+        return self._color.name(QColor.NameFormat.HexRgb) if self._color is not None else ""
 
     def _choose_color(self):
-        selected = QColorDialog.getColor(self._color, self, "Choose Text Color")
+        selected = QColorDialog.getColor(self._color or QColor(Qt.GlobalColor.white), self, "Choose Text Color")
         if not selected.isValid() or selected == self._color:
             return
         self._color = selected
@@ -202,6 +204,10 @@ class ColorButton(QPushButton):
 
     def _update_swatch(self):
         color = self.color()
+        if not color:
+            self.setText("Theme")
+            self.setStyleSheet("border: 1px solid #596170; border-radius: 6px; padding: 6px 10px;")
+            return
         text_color = "#111318" if self._color.lightness() > 150 else "#ffffff"
         self.setText(color.upper())
         self.setStyleSheet(
