@@ -236,6 +236,24 @@ class CommandManager:
         self._save_run_counts()
         return cleared
 
+    def seed_run_counts(self, counts: dict[str, int]) -> None:
+        """Start commands' run counts from outside usage records (how often
+        Windows says each was opened), so "most used first" is useful from
+        the first day. A count is only ever raised, never lowered, and only
+        user commands that exist are touched. Saved atomically."""
+        changed = False
+        for name, count in counts.items():
+            count = _safe_run_count(count)
+            cmd = self.commands.get(name)
+            if count <= 0 or cmd is None or cmd.get("type") == "system":
+                continue
+            if count > self.run_counts.get(name, 0):
+                self.run_counts[name] = count
+                cmd["times_executed"] = count
+                changed = True
+        if changed:
+            self._save_run_counts()
+
     # --------------------------------------------------------------- loading
 
     def _warn(self, message: str) -> None:

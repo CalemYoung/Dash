@@ -1687,6 +1687,19 @@ def delete_confirmation_text(names: list[str], groups_by_name: dict[str, list[st
     return f"{question}\n\n{heading}\n" + "\n".join(lines)
 
 
+def _delete_failure_message(name: str, error: Exception) -> str:
+    """A plain reason a delete failed; the technical detail goes to the log."""
+    from .command_manager import CommandsFileUnreadableError
+
+    if isinstance(error, CommandsFileUnreadableError):
+        return str(error)
+    if isinstance(error, PermissionError):
+        return f"Dash couldn't delete \"{name}\" because the commands file is in use or read-only. Close anything that has it open and try again."
+    if isinstance(error, OSError):
+        return f"Dash couldn't delete \"{name}\" because the commands file couldn't be saved. Make sure your drive has free space and try again."
+    return f"Dash couldn't delete \"{name}\". Details were saved to the log."
+
+
 class ManageCommandsDialog(DragToMoveMixin, QDialog):
     """Every command in one list: filter it, edit one, or delete several.
 
@@ -1863,7 +1876,7 @@ class ManageCommandsDialog(DragToMoveMixin, QDialog):
                 deleted.append(name)
             except Exception as error:
                 log.exception("Could not delete command %r", name)
-                QMessageBox.warning(self, "Delete Commands", f"Could not delete \"{name}\": {error}")
+                QMessageBox.warning(self, "Delete Commands", _delete_failure_message(name, error))
                 break
         gone = set(deleted)
         for item in self._items():

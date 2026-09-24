@@ -112,13 +112,15 @@ class GroupEditorTests(_CommandsFixture):
 
 class LauncherRowTests(_CommandsFixture):
     def _window(self):
-        return SimpleNamespace(
+        window = SimpleNamespace(
             results_list_widget=QListWidget(),
             settings=self.settings,
             icon_manager=self.icon_manager,
             hide_launcher=mock.Mock(),
             display_error_popup=mock.Mock(),
         )
+        window._add_row = lambda row, *args: MainWindow._add_row(window, row, *args)
+        return window
 
     def test_a_search_row_names_the_command_and_carries_the_query(self):
         window = self._window()

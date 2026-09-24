@@ -28,20 +28,30 @@ def _log_fatal_error():
     built with console=False, so print()/input() are invisible - without this,
     startup failures (e.g. missing DLLs/modules) crash completely silently.
     """
-    log_dir = get_app_data_dir() / "logs"
-    log_dir.mkdir(parents=True, exist_ok=True)
-    log_path = log_dir / "crash.log"
-    # Append rather than overwrite, so an earlier crash is not lost when a
-    # second start fails too.
-    with log_path.open("a", encoding="utf-8") as log_file:
-        log_file.write(f"\n=== {datetime.now().isoformat(timespec='seconds')} ===\n{traceback.format_exc()}")
+    details = traceback.format_exc()
+    try:
+        log_dir = get_app_data_dir() / "logs"
+        log_dir.mkdir(parents=True, exist_ok=True)
+        log_path = log_dir / "crash.log"
+        # Append rather than overwrite, so an earlier crash is not lost when a
+        # second start fails too.
+        with log_path.open("a", encoding="utf-8") as log_file:
+            log_file.write(f"\n=== {datetime.now().isoformat(timespec='seconds')} ===\n{details}")
+        where = f"Details were saved to:\n{log_path}"
+    except OSError:
+        # Still say that Dash failed, even when the log can't be written.
+        where = "Details could not be saved."
+    try:
+        logging.getLogger("dash").critical("Dash failed to start\n%s", details)
+    except Exception:
+        pass
 
     if sys.platform == "win32":
         import ctypes
 
         ctypes.windll.user32.MessageBoxW(
             0,
-            f"Dash failed to start.\n\nDetails were saved to:\n{log_path}",
+            f"Dash failed to start.\n\n{where}",
             "Dash - Startup Error",
             0x10,  # MB_ICONERROR
         )
@@ -147,13 +157,19 @@ if __name__ == "__main__":
         commands_path = get_resource_path("config/commands.toml")
         cmd_manager = CommandManager(commands_path, settings=settings)
 
-        # Create main window (starts hidden)
+        # Create main window (starts hidden). It shows the settings' and
+        # commands' load_warnings once the event loop runs, and reports
+        # unexpected errors from then on (app_log.set_error_reporter).
         window = MainWindow(cmd_manager, settings, settings_path=settings_path)
 
-        # Register global hotkey
+        # Register global hotkey. set_hotkey_listener also connects
+        # registrationFailed to a tray notification; the listener emits it
+        # on a zero-length timer, so connecting here, before app.exec(),
+        # is in time for the first report.
         listener = HotkeyListener(hotkey=settings.general.hotkey)
         listener.triggered.connect(window.activate_launcher)
         window.set_hotkey_listener(listener)
+        app.aboutToQuit.connect(listener.stop)
 
         # Later launches (Start Menu, desktop shortcut) land here as "show".
         instance_server = SingleInstanceServer(

@@ -29,7 +29,7 @@
 - **Already open? Switch to it:** Opening an app that is running brings its window forward rather than starting a second copy.
 - **Quick calculations:** Work out sums like `12*8`, `200+15%` or `sqrt(2)` where you type; Enter copies the answer.
 - **More than open:** Right-click a result (or use the keys below) to run it as administrator, open its folder, copy its path or open a new copy.
-- **Drag and drop:** Drop a file, folder, shortcut or link on Dash to make it a command.
+- **Add from anywhere:** Copy a file or folder in Explorer and press `Ctrl+V` in Dash, or drop a file, shortcut or link on it, to make it a command. Type something that matches nothing and Dash offers to add it.
 - **Icons you pick:** Every command gets one on its own, and you can swap in a library glyph or your own image, recolor it, or go back to the one Dash found.
 - **Take it with you:** Export commands to a portable file and import them on another PC, icons and all.
 - **Made to fit:** Light, dark or system theme, size, hotkeys, the display Dash opens on, the browser websites use, the web search engine, fonts, colors, the clock and startup behavior are all settings.
