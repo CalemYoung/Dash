@@ -6,6 +6,20 @@ All notable changes to Dash are listed here. The format follows
 
 ## [Unreleased]
 
+## [2.10.2] - 2026-09-24
+
+### Fixed
+
+- "Check for Updates" works on networks that have used up GitHub's API
+  limit (60 checks an hour per address, easily reached on a shared office
+  network): Dash falls back to the release page, and the installer is still
+  verified against its checksum. When GitHub really can't be reached, the
+  message says so instead of blaming your internet connection.
+
+### Removed
+
+- The security policy (SECURITY.md) and the links to it.
+
 ## [2.10.1] - 2026-09-24
 
 ### Added
@@ -87,6 +101,7 @@ All notable changes to Dash are listed here. The format follows
 See [GitHub Releases](https://github.com/CalemYoung/Dash/releases) for the
 notes on each earlier version.
 
-[Unreleased]: https://github.com/CalemYoung/Dash/compare/v2.10.1...HEAD
+[Unreleased]: https://github.com/CalemYoung/Dash/compare/v2.10.2...HEAD
+[2.10.2]: https://github.com/CalemYoung/Dash/compare/v2.10.1...v2.10.2
 [2.10.1]: https://github.com/CalemYoung/Dash/compare/v2.10.0...v2.10.1
 [2.10.0]: https://github.com/CalemYoung/Dash/releases/tag/v2.10.0

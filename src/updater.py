@@ -6,12 +6,14 @@ checksum, so a release without one can only be opened in the browser.
 """
 import hashlib
 import logging
+import re
 import subprocess
 import sys
 import tempfile
 import time
 from dataclasses import dataclass
 from pathlib import Path
+from urllib.parse import unquote
 
 from PyQt6.QtCore import QObject, QUrl, pyqtSignal
 from PyQt6.QtNetwork import QNetworkAccessManager, QNetworkReply, QNetworkRequest
@@ -109,6 +111,36 @@ def parse_release(payload) -> ReleaseInfo | None:
         installer_name=installer_name,
         installer_size=installer_size,
         checksum_url=checksum_url,
+    )
+
+
+def release_from_page_url(url: str) -> ReleaseInfo | None:
+    """The release that github.com/<repo>/releases/latest redirects to.
+
+    Used when the GitHub API refuses the check because of its rate limit
+    (60 an hour per address, easily used up on a shared office network);
+    the web redirect has no such limit. It gives only the tag, so the
+    installer and checksum addresses follow GitHub's fixed pattern for the
+    files the release workflow uploads. The size is unknown (0, so it is not
+    checked); the checksum still is.
+    """
+    match = re.fullmatch(r"(https://github\.com/[^/]+/[^/]+)/releases/tag/([^/?#]+)/?", str(url or "").strip())
+    if match is None:
+        return None
+    base, tag = match.group(1), unquote(match.group(2))
+    version = tag.lstrip("vV")
+    if not re.fullmatch(r"[0-9A-Za-z.+-]+", version):
+        return None
+    name = f"{INSTALLER_PREFIX}{version}.exe"
+    installer_url = f"{base}/releases/download/{tag}/{name}"
+    return ReleaseInfo(
+        version=version,
+        tag=tag,
+        page_url=f"{base}/releases/tag/{tag}",
+        installer_url=installer_url,
+        installer_name=name,
+        installer_size=0,
+        checksum_url=installer_url + CHECKSUM_SUFFIX,
     )
 
 

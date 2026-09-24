@@ -23,7 +23,7 @@ from .installed_programs import is_link_location
 from .version import current_version, is_newer_version
 from .keys import format_shortcut, key_sequences
 from .widgets import ElidedLabel
-from .updater import ReleaseInfo, UpdateDownloader, is_installed_build, launch_installer, parse_release
+from .updater import ReleaseInfo, UpdateDownloader, is_installed_build, launch_installer, parse_release, release_from_page_url
 import logging
 import os
 import re
@@ -1275,13 +1275,22 @@ class MainWindow(QMainWindow):
             self._check_updates_action.setEnabled(False)
             self._check_updates_action.setText("Checking for Updates...")
 
-        request = QNetworkRequest(QUrl(LATEST_RELEASE_API))
-        request.setRawHeader(b"Accept", b"application/vnd.github+json")
-        request.setRawHeader(b"X-GitHub-Api-Version", b"2022-11-28")
+        self._start_update_request(LATEST_RELEASE_API, api=True)
+
+    def _start_update_request(self, url: str, api: bool):
+        request = QNetworkRequest(QUrl(url))
+        if api:
+            request.setRawHeader(b"Accept", b"application/vnd.github+json")
+            request.setRawHeader(b"X-GitHub-Api-Version", b"2022-11-28")
+        else:
+            # Only the redirect is wanted: where /releases/latest points.
+            request.setAttribute(
+                QNetworkRequest.Attribute.RedirectPolicyAttribute, QNetworkRequest.RedirectPolicy.ManualRedirectPolicy
+            )
         request.setRawHeader(b"User-Agent", b"Dash-Update-Checker")
         request.setTransferTimeout(10000)
         self._update_reply = self._update_network.get(request)
-        self._update_reply.finished.connect(self._on_update_check_finished)
+        self._update_reply.finished.connect(self._on_update_check_finished if api else self._on_update_page_finished)
 
     def _on_update_check_finished(self):
         import json
@@ -1290,6 +1299,41 @@ class MainWindow(QMainWindow):
         if reply is None:
             return
         self._update_reply = None
+        status = reply.attribute(QNetworkRequest.Attribute.HttpStatusCodeAttribute)
+        if reply.error() != QNetworkReply.NetworkError.NoError and status in (403, 429):
+            # GitHub's API allows 60 unauthenticated requests an hour per
+            # address, which a shared office network can use up. The release
+            # page's redirect has no such limit.
+            log.info("GitHub's API refused the update check (HTTP %s); asking the release page instead", status)
+            reply.deleteLater()
+            self._start_update_request(LATEST_RELEASE_PAGE, api=False)
+            return
+
+        release = error = None
+        try:
+            if reply.error() != QNetworkReply.NetworkError.NoError:
+                raise RuntimeError(reply.errorString())
+            release = parse_release(json.loads(bytes(reply.readAll()).decode("utf-8")))
+            if release is None:
+                raise ValueError("GitHub returned incomplete release information")
+        except (RuntimeError, ValueError, UnicodeDecodeError, json.JSONDecodeError) as caught:
+            error = caught
+        reply.deleteLater()
+        self._finish_update_check(release, error)
+
+    def _on_update_page_finished(self):
+        reply = self._update_reply
+        if reply is None:
+            return
+        self._update_reply = None
+        target = reply.attribute(QNetworkRequest.Attribute.RedirectionTargetAttribute)
+        location = QUrl(LATEST_RELEASE_PAGE).resolved(target).toString() if isinstance(target, QUrl) and target.isValid() else ""
+        release = release_from_page_url(location)
+        error = None if release is not None else RuntimeError(f"the release page did not name a release ({reply.errorString()})")
+        reply.deleteLater()
+        self._finish_update_check(release, error)
+
+    def _finish_update_check(self, release: ReleaseInfo | None, error: Exception | None):
         manual = self._update_check_manual
         self._update_check_manual = False
 
@@ -1297,26 +1341,18 @@ class MainWindow(QMainWindow):
             self._check_updates_action.setEnabled(True)
             self._check_updates_action.setText("Check for Updates...")
 
-        try:
-            if reply.error() != QNetworkReply.NetworkError.NoError:
-                raise RuntimeError(reply.errorString())
-            release = parse_release(json.loads(bytes(reply.readAll()).decode("utf-8")))
-            installed_version = current_version()
-            if release is None:
-                raise ValueError("GitHub returned incomplete release information")
-        except (RuntimeError, ValueError, UnicodeDecodeError, json.JSONDecodeError) as error:
+        if error is not None or release is None:
             log.warning("Update check failed: %s", error)
             if manual:
                 with self._dialog_open():
                     QMessageBox.warning(
                         self,
                         "Check for Updates",
-                        "Dash couldn't check for updates. Check your internet connection and try again later.",
+                        "Dash couldn't reach GitHub to check for updates. Try again later.",
                     )
-            reply.deleteLater()
             return
 
-        reply.deleteLater()
+        installed_version = current_version()
         if not is_newer_version(release.tag, installed_version):
             if manual:
                 with self._dialog_open():

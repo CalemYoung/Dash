@@ -8,7 +8,7 @@ from PyQt6.QtCore import QObject, pyqtSignal
 from PyQt6.QtNetwork import QNetworkReply
 
 from src import updater
-from src.updater import ReleaseInfo, UpdateDownloader, parse_release, remove_stale_downloads
+from src.updater import ReleaseInfo, UpdateDownloader, parse_release, release_from_page_url, remove_stale_downloads
 
 INSTALLER = b"MZ" + b"installer bytes" * 100
 DIGEST = hashlib.sha256(INSTALLER).hexdigest()
@@ -57,6 +57,33 @@ class ParseReleaseTests(unittest.TestCase):
         payload = release_payload()
         payload["assets"][0]["browser_download_url"] = "http://example.com/DashSetup-1.2.3.exe"
         self.assertIsNone(parse_release(payload).installer_url)
+
+
+class ReleasePageTests(unittest.TestCase):
+    """The fallback when the GitHub API is rate limited: the tag from the
+    page /releases/latest redirects to, and the workflow's asset names."""
+
+    def test_the_redirect_gives_the_release_and_its_files(self):
+        release = release_from_page_url("https://github.com/CalemYoung/Dash/releases/tag/v2.10.1")
+        self.assertEqual((release.version, release.tag), ("2.10.1", "v2.10.1"))
+        self.assertEqual(release.page_url, "https://github.com/CalemYoung/Dash/releases/tag/v2.10.1")
+        self.assertEqual(release.installer_url, "https://github.com/CalemYoung/Dash/releases/download/v2.10.1/DashSetup-2.10.1.exe")
+        self.assertEqual(release.checksum_url, release.installer_url + ".sha256")
+        self.assertEqual(release.installer_name, "DashSetup-2.10.1.exe")
+        self.assertEqual(release.installer_size, 0, "unknown, so the size is not checked; the checksum still is")
+        self.assertTrue(release.installable)
+
+    def test_anything_else_gives_none(self):
+        for url in (
+            "",
+            "https://github.com/CalemYoung/Dash/releases",
+            "https://github.com/CalemYoung/Dash/releases/latest",
+            "http://github.com/CalemYoung/Dash/releases/tag/v1.0.0",
+            "https://example.com/CalemYoung/Dash/releases/tag/v1.0.0",
+            "https://github.com/CalemYoung/Dash/releases/tag/v1.0.0%2F..%2Fevil",
+        ):
+            with self.subTest(url=url):
+                self.assertIsNone(release_from_page_url(url))
 
 
 class StaleDownloadTests(unittest.TestCase):
