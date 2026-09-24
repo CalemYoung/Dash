@@ -1,9 +1,14 @@
 # src/settings.py
+import logging
 import tomllib
 import shutil
 import sys
 from pathlib import Path
 from dataclasses import asdict, dataclass, field, fields
+
+from .fileio import atomic_write_text, quarantine_file
+
+log = logging.getLogger(__name__)
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_SETTINGS_PATH = PROJECT_ROOT / "config" / "settings.default.toml"
@@ -20,10 +25,30 @@ def toml_str(value) -> str:
     back to a basic (double-quoted) string with escapes.
     """
     text = str(value)
-    if "'" not in text and "\n" not in text and "\r" not in text:
+    if "'" not in text and not any(_needs_escape(char) for char in text):
         return f"'{text}'"
-    escaped = text.replace("\\", "\\\\").replace('"', '\\"').replace("\r", "\\r").replace("\n", "\\n")
-    return f'"{escaped}"'
+    escaped = []
+    for char in text:
+        if char == "\\":
+            escaped.append("\\\\")
+        elif char == '"':
+            escaped.append('\\"')
+        elif char in _SHORT_ESCAPES:
+            escaped.append(_SHORT_ESCAPES[char])
+        elif _needs_escape(char):
+            escaped.append(f"\\u{ord(char):04X}")
+        else:
+            escaped.append(char)
+    return '"' + "".join(escaped) + '"'
+
+
+_SHORT_ESCAPES = {"\b": "\\b", "\t": "\\t", "\n": "\\n", "\f": "\\f", "\r": "\\r"}
+
+
+def _needs_escape(char: str) -> bool:
+    """TOML strings cannot hold control characters (other than tab) as they are."""
+    code = ord(char)
+    return (code < 0x20 and char != "\t") or code == 0x7F
 
 
 def toml_value(value) -> str:
@@ -55,10 +80,13 @@ class GeneralSettings:
     web_search: str = DEFAULT_SETTINGS["general"]["web_search"]
     web_search_enabled: bool = DEFAULT_SETTINGS["general"]["web_search_enabled"]
     switch_to_open_apps: bool = DEFAULT_SETTINGS["general"]["switch_to_open_apps"]
+    hide_when_focus_lost: bool = DEFAULT_SETTINGS["general"]["hide_when_focus_lost"]
+    download_favicons: bool = DEFAULT_SETTINGS["general"]["download_favicons"]
 
 
 @dataclass
 class UISettings:
+    theme: str = DEFAULT_SETTINGS["ui"]["theme"]
     program_width: int = DEFAULT_SETTINGS["ui"]["program_width"]
     search_height: int = DEFAULT_SETTINGS["ui"]["search_height"]
     results_height: int = DEFAULT_SETTINGS["ui"]["results_height"]
@@ -77,6 +105,18 @@ class UISettings:
 
 
 SORT_RESULTS_OPTIONS = ("popularity", "name")
+THEME_OPTIONS = ("system", "light", "dark")
+
+# The text colours Dash shipped with before it had a light theme. A settings
+# file still holding exactly these was never customised, so they are read as
+# "follow the theme" rather than forcing light text onto a light window.
+LEGACY_DEFAULT_TEXT_COLORS = {
+    "search_text_color": "#f3f4f7",
+    "result_text_color": "#e7e9ee",
+    "description_text_color": "#8f96a3",
+    "clock_day_text_color": "#f3f4f7",
+    "clock_date_text_color": "#9da4b0",
+}
 
 
 @dataclass
@@ -84,6 +124,7 @@ class SearchSettings:
     max_results: int = DEFAULT_SETTINGS["search"]["max_results"]
     autocomplete: bool = DEFAULT_SETTINGS["search"]["autocomplete"]
     ignore_case: bool = DEFAULT_SETTINGS["search"]["ignore_case"]
+    match_word_starts: bool = DEFAULT_SETTINGS["search"]["match_word_starts"]
     sort_results: str = DEFAULT_SETTINGS["search"]["sort_results"]
     show_descriptions: bool = DEFAULT_SETTINGS["search"]["show_descriptions"]
     show_run_counter: bool = DEFAULT_SETTINGS["search"]["show_run_counter"]
@@ -120,6 +161,9 @@ class Settings:
     search: SearchSettings = field(default_factory=SearchSettings)
     shortcuts: ShortcutSettings = field(default_factory=ShortcutSettings)
     paths: PathSettings = field(default_factory=PathSettings)
+    # Plain-language notes about problems met while loading (a damaged file
+    # set aside, say), for the GUI to show once. Never saved.
+    load_warnings: list[str] = field(default_factory=list, compare=False, repr=False)
 
     @staticmethod
     def _resolve_asset_path(raw_path: str) -> str:
@@ -162,8 +206,23 @@ class Settings:
         if not settings_path.exists():
             return cls().normalize_resource_paths()  # Return defaults if file doesn't exist
 
-        with settings_path.open("rb") as f:
-            data = tomllib.load(f)
+        try:
+            with settings_path.open("rb") as f:
+                data = tomllib.load(f)
+        except (tomllib.TOMLDecodeError, UnicodeDecodeError, OSError) as error:
+            # A damaged settings file should never stop Dash from starting.
+            # Keep it for reference, start from the defaults, and say so.
+            log.error("Could not read settings file %s: %s", settings_path, error)
+            moved = quarantine_file(settings_path) if not isinstance(error, OSError) else None
+            settings = cls()
+            if moved is not None:
+                settings.load_warnings.append(
+                    f"Your settings file could not be read, so Dash started with the default settings.\n\n"
+                    f"The old file was kept as:\n{moved}"
+                )
+            else:
+                settings.load_warnings.append("Your settings file could not be read, so Dash is using the default settings for now.")
+            return settings.normalize_resource_paths()
 
         settings = cls(
             general=_from_section(GeneralSettings, data.get("general", {})),
@@ -174,6 +233,11 @@ class Settings:
         )
         if settings.search.sort_results not in SORT_RESULTS_OPTIONS:
             settings.search.sort_results = SORT_RESULTS_OPTIONS[0]
+        if settings.ui.theme not in THEME_OPTIONS:
+            settings.ui.theme = THEME_OPTIONS[0]
+        for key, legacy in LEGACY_DEFAULT_TEXT_COLORS.items():
+            if str(getattr(settings.ui, key, "")).strip().lower() == legacy:
+                setattr(settings.ui, key, "")
 
         # Older files had a yes/no "follow the mouse" flag instead of a screen choice.
         general = data.get("general", {})
@@ -205,12 +269,11 @@ class Settings:
             for key, value in values.items():
                 lines.append(f"{key} = {toml_value(value)}")
             lines.append("")
-        settings_path.parent.mkdir(parents=True, exist_ok=True)
-        settings_path.write_text("\n".join(lines), encoding="utf-8")
+        atomic_write_text(settings_path, "\n".join(lines))
 
     @staticmethod
     def _create_default_file(settings_path: Path):
         """Create a default settings.toml file"""
         settings_path.parent.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(DEFAULT_SETTINGS_PATH, settings_path)
-        print(f"Created default settings file: {settings_path}")
+        log.info("Created default settings file: %s", settings_path)

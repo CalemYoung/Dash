@@ -1,8 +1,10 @@
 import sys
 from pathlib import Path
 import shutil
+import logging
 import os
 import traceback
+from datetime import datetime
 
 
 def get_app_data_dir():
@@ -26,8 +28,13 @@ def _log_fatal_error():
     built with console=False, so print()/input() are invisible - without this,
     startup failures (e.g. missing DLLs/modules) crash completely silently.
     """
-    log_path = get_app_data_dir() / "crash.log"
-    log_path.write_text(traceback.format_exc(), encoding="utf-8")
+    log_dir = get_app_data_dir() / "logs"
+    log_dir.mkdir(parents=True, exist_ok=True)
+    log_path = log_dir / "crash.log"
+    # Append rather than overwrite, so an earlier crash is not lost when a
+    # second start fails too.
+    with log_path.open("a", encoding="utf-8") as log_file:
+        log_file.write(f"\n=== {datetime.now().isoformat(timespec='seconds')} ===\n{traceback.format_exc()}")
 
     if sys.platform == "win32":
         import ctypes
@@ -39,6 +46,16 @@ def _log_fatal_error():
             0x10,  # MB_ICONERROR
         )
 
+
+try:
+    from src.app_log import setup_logging
+
+    setup_logging(get_app_data_dir())
+except Exception:
+    # Logging is a convenience; failing to set it up must not stop Dash.
+    pass
+
+log = logging.getLogger("dash")
 
 try:
     # Import the submodules directly rather than through the package's lazy
@@ -87,7 +104,7 @@ def get_resource_path(relative_path):
 
                 if default_file.exists():
                     shutil.copy(default_file, resource_path)
-                    print(f"Created default {relative_path} in AppData")
+                    log.info("Created default %s in AppData", relative_path)
 
         return resource_path
 

@@ -1,7 +1,9 @@
 [general]
-hotkey = "Alt+F"
+# Alt+Space is the usual launcher key. Pick another under Settings if it
+# clashes with something you use.
+hotkey = "Alt+Space"
 # Which display the launcher opens on: "mouse" (the one the pointer is on),
-# "primary", or a display's name as listed in Settings. It is always centred
+# "primary", or a display's name as listed in Settings. It is always centered
 # on that display, so it never gets left behind on the screen it last used.
 launcher_screen = "mouse"
 # Browser for website commands: "default" for the Windows default, or a
@@ -18,30 +20,42 @@ web_search_enabled = false
 # Opening an app that is already running brings its window to the front
 # instead of starting another copy.
 switch_to_open_apps = true
+# Hide the launcher when you click somewhere else, like the Start menu does.
+hide_when_focus_lost = true
+# Fetch each website's icon from the site (via Google's or DuckDuckGo's
+# favicon service when the site has none). Turn off to make no requests for
+# icons; website commands then use the default website icon.
+download_favicons = true
 
 [ui]
+# "system" follows the Windows light or dark app mode; "light" or "dark" fixes it.
+theme = "system"
 program_width = 600
 search_height = 70
 # Sized to five whole result rows; the list snaps to whole rows anyway.
 results_height = 288
 editor_height = 600
-window_opacity = 0.97
+window_opacity = 1.0
 search_font_size = 24
-search_text_color = "#f3f4f7"
+# Text colors: leave empty ("") to follow the theme, or set "#rrggbb".
+search_text_color = ""
 result_font_size = 14
-result_text_color = "#e7e9ee"
+result_text_color = ""
 description_font_size = 10
-description_text_color = "#8f96a3"
+description_text_color = ""
 show_clock = true
 clock_font_size = 10
-clock_day_text_color = "#f3f4f7"
-clock_date_text_color = "#9da4b0"
+clock_day_text_color = ""
+clock_date_text_color = ""
 
 [search]
 max_results = 20
 autocomplete = true
-# Match names and aliases regardless of capitalisation.
+# Match names and aliases regardless of capitalization.
 ignore_case = true
+# Also match the start of any word in a name, so "code" finds "Visual Studio
+# Code". These matches always come after names that start with what you typed.
+match_word_starts = true
 # "popularity" puts the most-run matches first (ties by name); "name" is alphabetical.
 sort_results = "popularity"
 show_descriptions = true
