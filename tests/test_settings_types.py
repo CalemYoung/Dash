@@ -28,6 +28,23 @@ class SettingsValueTypeTests(unittest.TestCase):
         self.assertEqual(self._load("[ui]\nwindow_opacity = 0.97\n").ui.window_opacity, 1.0)
         self.assertEqual(self._load("[ui]\nwindow_opacity = 0.8\n").ui.window_opacity, 0.8)
 
+    def test_the_old_medium_size_gets_the_smaller_search_text(self):
+        old_medium = (
+            "[ui]\nprogram_width = 600\nsearch_height = 70\nresults_height = 288\n"
+            "search_font_size = 24\nresult_font_size = 14\ndescription_font_size = 10\n"
+        )
+        ui = self._load(old_medium).ui
+        self.assertEqual((ui.search_font_size, ui.result_font_size, ui.description_font_size), (20, 13, 10))
+        # A size someone chose themselves is left alone.
+        customised = self._load(old_medium.replace("program_width = 600", "program_width = 640")).ui
+        self.assertEqual((customised.search_font_size, customised.result_font_size), (24, 14))
+
+    def test_the_new_defaults_are_the_medium_preset(self):
+        from src.settings_editor import SIZE_PRESETS, size_preset
+
+        self.assertEqual(size_preset(Settings().ui), "medium")
+        self.assertEqual(SIZE_PRESETS["medium"]["search_font_size"], 20)
+
 
 if __name__ == "__main__":
     unittest.main()

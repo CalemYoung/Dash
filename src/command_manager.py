@@ -11,6 +11,7 @@ from urllib.parse import urlparse
 
 from .browsers import fill_query, is_search_link
 from .browsers import open_url as open_in_browser
+from .child_process import clean_dll_search
 from .command_trie import CommandTrie, WordStartIndex
 from .fileio import atomic_write_text, quarantine_file
 from .icon_manager import command_source_icon_path
@@ -1204,9 +1205,11 @@ class CommandManager:
                 location = cmd["location"]
                 if is_search_link(location):
                     location = fill_query(location, query or "")
-                self._open_url(location, cmd.get("browser") or self.settings.general.browser)
+                with clean_dll_search():
+                    self._open_url(location, cmd.get("browser") or self.settings.general.browser)
             else:
-                self._open_file(cmd.get("_path") or cmd["location"], **_launch_fields(cmd), switch=not new_instance)
+                with clean_dll_search():
+                    self._open_file(cmd.get("_path") or cmd["location"], **_launch_fields(cmd), switch=not new_instance)
             logger.info("Opened %s", cmd.get("name"))
             return None
         except FileNotFoundError as error:
@@ -1329,7 +1332,8 @@ class CommandManager:
         if not self.can_run_as_administrator(name):
             return "Only apps and files can be run as administrator."
         try:
-            self._open_file(cmd.get("_path") or cmd["location"], **_launch_fields(cmd), switch=False, operation="runas")
+            with clean_dll_search():
+                self._open_file(cmd.get("_path") or cmd["location"], **_launch_fields(cmd), switch=False, operation="runas")
         except FileNotFoundError as error:
             return str(error)
         except OSError as error:
@@ -1361,14 +1365,16 @@ class CommandManager:
             target = Path(cmd["process_path"]).expanduser()
         try:
             if target.is_dir():
-                os.startfile(str(target))
+                with clean_dll_search():
+                    os.startfile(str(target))
                 return None
             if not target.exists():
                 return f"The target no longer exists:\n{target}"
             explorer = Path(os.environ.get("SystemRoot", r"C:\Windows")) / "explorer.exe"
             # One command line, not a list: Explorer wants /select,"path" and
             # would misread the quoting a list gets. No shell is involved.
-            subprocess.Popen(f'"{explorer}" /select,"{target}"')
+            with clean_dll_search():
+                subprocess.Popen(f'"{explorer}" /select,"{target}"')
         except OSError as error:
             return f"Windows could not open it: {error.strerror or error}"
         return None

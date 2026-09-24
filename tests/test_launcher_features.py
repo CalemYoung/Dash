@@ -235,28 +235,54 @@ class CalculatorAndNoResultTests(_LauncherFixture):
         self.assertTrue(self.window.isVisible())
         self.assertEqual(self.box.text(), "1/0")
 
-    def test_words_and_half_typed_sums_get_the_add_and_search_rows(self):
+    def test_with_web_search_off_only_the_no_match_line_shows(self):
         for text in ("zzqx", "12*"):
             self.box.setText(text)
-            self.assertEqual(self._titles(), [f"Add \u201c{text}\u201d as a command", f"Search the web for \u201c{text}\u201d"], text)
+            self.assertEqual(self._titles(), [f"No commands match \u201c{text}\u201d"], text)
+            self.assertIsNone(self.window.get_selected_row(), "nothing is selected, so Enter does nothing")
 
     def test_with_web_search_on_the_search_comes_first(self):
         self.settings.general.web_search_enabled = True
         self.box.setText("zzqx")
-        self.assertEqual(self._titles(), ["Search the web for \u201czzqx\u201d", "Add \u201czzqx\u201d as a command"])
+        self.assertEqual(self._titles(), ["Search the web for \u201czzqx\u201d", "No commands match \u201czzqx\u201d"])
+        self.assertEqual(self.window.results_list_widget.currentRow(), 0)
+        # The arrows stay on the search: the line below is only for reading.
+        self._press(Qt.Key.Key_Down)
+        self.assertEqual(self.window.results_list_widget.currentRow(), 0)
 
-    def test_add_opens_the_editor_with_the_name_filled_in(self):
+    def test_enter_with_no_match_does_not_open_the_editor(self):
+        self.window.show()
+        with mock.patch.object(self.window, "open_new_command_with") as open_new:
+            self.box.setText("zzqx")
+            self.window.on_enter_pressed()
+        open_new.assert_not_called()
+        self.assertEqual(self.box.text(), "zzqx")
+
+    def test_the_no_match_line_names_the_new_command_shortcut(self):
         self.box.setText("zzqx")
-        self.window.on_enter_pressed()
+        row = self._rows()[0]
+        shortcut = self.window._format_shortcut(self.settings.shortcuts.new_command)
+        self.assertIn(shortcut, row.description_label.full_text())
+
+    def test_ctrl_n_opens_the_editor_with_the_name_filled_in(self):
+        self.window.show()
+        self.box.setText("zzqx")
+        self.window.open_new_command()
         panel = self.window._editor_panel
         self.assertIsNotNone(panel)
         self.assertEqual(panel.command_name_edit_box.text(), "zzqx")
         self.window.close_editor()
 
-    def test_add_uses_a_web_address_as_the_target(self):
+    def test_add_to_dash_from_explorer_opens_the_editor_with_the_path(self):
+        with mock.patch.object(self.window, "open_new_command_with") as open_new:
+            self.window.add_from_explorer('"C:/Tools/My App.lnk"')
+        open_new.assert_called_once_with(target=r"C:\Tools\My App.lnk")
+
+    def test_ctrl_n_uses_a_web_address_as_the_target(self):
+        self.window.show()
         with mock.patch.object(self.window, "open_new_command_with") as open_new:
             self.box.setText("example.org")
-            self.window.on_enter_pressed()
+            self.window.open_new_command()
         open_new.assert_called_once_with(name=None, target="https://example.org")
 
     def test_ctrl_n_starts_from_the_typed_text(self):
@@ -368,8 +394,18 @@ class ResultRowTests(_LauncherFixture):
             self._press(Qt.Key.Key_Menu)
             app.sendEvent(self.box, QContextMenuEvent(QContextMenuEvent.Reason.Keyboard, QPoint(1, 1)))
             self.assertEqual(show.call_count, 1, "the key press and its context menu event are one request")
+
+    def test_shift_f10_opens_no_menu(self):
+        from PyQt6.QtCore import QPoint
+        from PyQt6.QtGui import QContextMenuEvent
+
+        self.box.setText("tool")
+        with mock.patch.object(self.window, "show_row_menu") as show:
             self._press(Qt.Key.Key_F10, Qt.KeyboardModifier.ShiftModifier)
-            self.assertEqual(show.call_count, 2)
+            with mock.patch("src.launcher_gui.QApplication.keyboardModifiers", return_value=Qt.KeyboardModifier.ShiftModifier):
+                handled = self.window.eventFilter(self.box, QContextMenuEvent(QContextMenuEvent.Reason.Keyboard, QPoint(1, 1)))
+        self.assertTrue(handled, "the box's own edit menu doesn't open either")
+        show.assert_not_called()
 
     def test_delete_asks_first_and_names_the_groups(self):
         with mock.patch("src.launcher_gui.QMessageBox.question", return_value=QMessageBox.StandardButton.Cancel) as question:

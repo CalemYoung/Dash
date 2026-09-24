@@ -22,6 +22,7 @@ from PyQt6.QtGui import QIcon, QPixmap, QDesktopServices, QShortcut
 from PyQt6.QtNetwork import QNetworkAccessManager, QNetworkRequest, QNetworkReply
 
 from src.browsers import DEFAULT_BROWSER, fill_query, installed_browsers, is_search_link
+from src.child_process import clean_dll_search
 from src.installed_programs import command_name_for_link, command_name_for_target, is_app_id_location, is_link_location
 from src.windows_settings import is_settings_location, settings_description
 from src.keys import format_shortcut, key_sequences
@@ -899,7 +900,8 @@ class CommandActionEditor(QFrame):
     def _open_in_browser(self):
         text = self.command_action_edit_box.text().strip()
         if text:
-            QDesktopServices.openUrl(QUrl.fromUserInput(fill_query(text, "")))
+            with clean_dll_search():
+                QDesktopServices.openUrl(QUrl.fromUserInput(fill_query(text, "")))
 
 
 # Second-level labels that are part of the public suffix, not the site's

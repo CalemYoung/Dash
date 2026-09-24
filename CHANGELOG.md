@@ -12,14 +12,18 @@ All notable changes to Dash are listed here. The format follows
 - A choice of web search engine for the "search the web" offer.
 - A "Download website icons" setting, to stop Dash fetching favicons.
 - A list in Settings for managing all of your commands in one place.
-- Actions on a result (right-click, the Menu key or Shift+F10): run as
+- Actions on a result (right-click or the Menu key): run as
   administrator, open the containing folder, copy the path or address, and
   open a new copy of an app that is already running.
 - Arguments and "Start in" fields for app commands.
 - Drag and drop a file, folder, shortcut or link onto Dash, or paste a file
   copied in Explorer, to add it as a command.
-- When nothing matches, Dash offers to add the text as a command or to
-  search the web for it.
+- When nothing matches, Dash says so and names the shortcut that adds the
+  text as a command (`Ctrl+N`, which fills it in). With "Web search unknown
+  commands" on, a web search is offered first.
+- An optional "Add to Dash" item in File Explorer's right-click menu for
+  files, folders and shortcuts. It is off by default; turn it on in the
+  installer or under Settings. On Windows 11 it is under "Show more options".
 - Size presets (Small, Medium, Large) in Settings.
 - "Open Dash", "Settings..." and "Open Log Folder" in the tray menu.
 - Recommended websites use your local Wikipedia and Amazon store.
@@ -46,6 +50,16 @@ All notable changes to Dash are listed here. The format follows
 - The installer no longer adds "Edit Settings" and "Edit Commands" Start
   Menu shortcuts that opened the raw files in Notepad; both are edited in
   Dash.
+- The installer closes a running Dash itself rather than asking, and its
+  finish page names the hotkey you use.
+- Smaller default text in the search box and results, so the hint text fits.
+  Settings that still hold the old Small, Medium or Large sizes move to the
+  new ones.
+- Text colors follow the light or dark theme; the separate text color
+  settings are gone.
+- The footer's list of keys is a keyboard icon: hover over it, or click it.
+- `Shift+F10` no longer opens the actions menu; right-click or use the Menu
+  key.
 
 ### Fixed
 
@@ -61,6 +75,10 @@ All notable changes to Dash are listed here. The format follows
   your Dash settings and commands?" with No as the default; nothing is
   deleted until the uninstall has finished; and installers downloaded by
   the updater are removed.
+- Apps opened from Dash no longer keep Dash's files in use, which made the
+  installer ask to close them (VS Code, for example) before an upgrade.
+- A new hotkey can be recorded in Settings even when it uses `Alt` or is the
+  hotkey already in use: Dash pauses its hotkey while you record.
 
 ## [2.10.0] and earlier
 

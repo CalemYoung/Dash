@@ -75,7 +75,8 @@ try:
     from src.launcher_hotkey import HotkeyListener
     from src.settings import Settings
     from src import theme
-    from src.single_instance import SHOW_MESSAGE, SingleInstanceServer, notify_running_instance
+    from src import explorer_menu
+    from src.single_instance import SHOW_MESSAGE, SingleInstanceServer, add_message, notify_running_instance, path_from_add_message
     from src.version import current_version
     from PyQt6.QtCore import QTimer
     from PyQt6.QtWidgets import QApplication
@@ -138,10 +139,12 @@ if __name__ == "__main__":
         app = QApplication(sys.argv)
         app.setQuitOnLastWindowClosed(False)
         started_by_windows = STARTUP_FLAG in sys.argv[1:]
+        # "Add to Dash" in File Explorer's right-click menu passes a path.
+        path_to_add = explorer_menu.path_from_arguments(sys.argv[1:])
 
-        # Already running? Ask that copy to show itself and bow out, so a
-        # click on the icon never produces a second process and hotkey hook.
-        if notify_running_instance(SHOW_MESSAGE):
+        # Already running? Ask that copy to show itself (or add the path)
+        # and bow out, so a click never produces a second process and hook.
+        if notify_running_instance(add_message(path_to_add) if path_to_add else SHOW_MESSAGE):
             sys.exit(0)
 
         # Load settings from AppData (creates default if needed)
@@ -171,15 +174,25 @@ if __name__ == "__main__":
         window.set_hotkey_listener(listener)
         app.aboutToQuit.connect(listener.stop)
 
-        # Later launches (Start Menu, desktop shortcut) land here as "show".
-        instance_server = SingleInstanceServer(
-            lambda message: window.activate_launcher() if message == SHOW_MESSAGE else None,
-            parent=app,
-        )
+        # Later launches land here: "show" from the Start Menu or a desktop
+        # shortcut, "add:<path>" from File Explorer's menu.
+        def on_instance_message(message):
+            if message == SHOW_MESSAGE:
+                window.activate_launcher()
+            elif (path := path_from_add_message(message)) is not None:
+                window.add_from_explorer(path)
+
+        instance_server = SingleInstanceServer(on_instance_message, parent=app)
+
+        # Keep the File Explorer item pointing at this Dash.exe if Dash was
+        # reinstalled somewhere else.
+        explorer_menu.refresh()
 
         # Started by a person rather than by Windows at sign-in: show the
         # search bar so the click visibly did something.
-        if not started_by_windows:
+        if path_to_add:
+            QTimer.singleShot(0, lambda: window.add_from_explorer(path_to_add))
+        elif not started_by_windows:
             QTimer.singleShot(0, window.activate_launcher)
 
         sys.exit(app.exec())

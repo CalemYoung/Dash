@@ -122,31 +122,38 @@ class UISettings:
     editor_height: int = DEFAULT_SETTINGS["ui"]["editor_height"]
     window_opacity: float = DEFAULT_SETTINGS["ui"]["window_opacity"]
     search_font_size: int = DEFAULT_SETTINGS["ui"]["search_font_size"]
-    search_text_color: str = DEFAULT_SETTINGS["ui"]["search_text_color"]
     result_font_size: int = DEFAULT_SETTINGS["ui"]["result_font_size"]
-    result_text_color: str = DEFAULT_SETTINGS["ui"]["result_text_color"]
     description_font_size: int = DEFAULT_SETTINGS["ui"]["description_font_size"]
-    description_text_color: str = DEFAULT_SETTINGS["ui"]["description_text_color"]
     show_clock: bool = DEFAULT_SETTINGS["ui"]["show_clock"]
     clock_font_size: int = DEFAULT_SETTINGS["ui"]["clock_font_size"]
-    clock_day_text_color: str = DEFAULT_SETTINGS["ui"]["clock_day_text_color"]
-    clock_date_text_color: str = DEFAULT_SETTINGS["ui"]["clock_date_text_color"]
 
 
 SORT_RESULTS_OPTIONS = ("popularity", "name")
 THEME_OPTIONS = ("system", "light", "dark")
 
-# The text colours Dash shipped with before it had a light theme. A settings
-# file still holding exactly these was never customised, so they are read as
-# "follow the theme" rather than forcing light text onto a light window.
 LEGACY_DEFAULT_OPACITY = 0.97
-LEGACY_DEFAULT_TEXT_COLORS = {
-    "search_text_color": "#f3f4f7",
-    "result_text_color": "#e7e9ee",
-    "description_text_color": "#8f96a3",
-    "clock_day_text_color": "#f3f4f7",
-    "clock_date_text_color": "#9da4b0",
-}
+
+# The Small, Medium and Large sizes before their search text was made
+# smaller (it filled the search bar and cut off the hint). A file holding one
+# of them exactly was never customised, so it moves to that preset's new font
+# sizes; the window sizes did not change.
+LEGACY_SIZE_PRESETS = (
+    (
+        {"program_width": 520, "search_height": 58, "results_height": 248,
+         "search_font_size": 20, "result_font_size": 12, "description_font_size": 9},
+        {"search_font_size": 18},
+    ),
+    (
+        {"program_width": 600, "search_height": 70, "results_height": 288,
+         "search_font_size": 24, "result_font_size": 14, "description_font_size": 10},
+        {"search_font_size": 20, "result_font_size": 13},
+    ),
+    (
+        {"program_width": 720, "search_height": 84, "results_height": 348,
+         "search_font_size": 28, "result_font_size": 16, "description_font_size": 12},
+        {"search_font_size": 24, "result_font_size": 15, "description_font_size": 11},
+    ),
+)
 
 
 @dataclass
@@ -283,9 +290,11 @@ class Settings:
         if settings.ui.window_opacity == LEGACY_DEFAULT_OPACITY:
             settings.ui.window_opacity = 1.0
         settings.ui.window_opacity = min(1.0, max(0.3, settings.ui.window_opacity))
-        for key, legacy in LEGACY_DEFAULT_TEXT_COLORS.items():
-            if str(getattr(settings.ui, key, "")).strip().lower() == legacy:
-                setattr(settings.ui, key, "")
+        for legacy, updated in LEGACY_SIZE_PRESETS:
+            if all(getattr(settings.ui, key) == value for key, value in legacy.items()):
+                for key, value in updated.items():
+                    setattr(settings.ui, key, value)
+                break
 
         # Older files had a yes/no "follow the mouse" flag instead of a screen choice.
         general = data.get("general", {})

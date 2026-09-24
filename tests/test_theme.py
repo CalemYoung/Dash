@@ -228,9 +228,6 @@ class ResolveTests(unittest.TestCase):
             theme._on_system_scheme_changed()
         target.setStyleSheet.assert_not_called()
 
-    def test_empty_text_color_settings_follow_the_theme(self):
-        self.assertEqual(theme.text_color("", "result_text"), theme.color("result_text"))
-        self.assertEqual(theme.text_color("#123456", "result_text"), QColor("#123456"))
 
 
 

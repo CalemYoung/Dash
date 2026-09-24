@@ -10,7 +10,8 @@ Who is first is decided by a lock, not by the pipe: a named mutex on Windows
 (released by Windows when the process ends, even after a crash) and a
 QLockFile elsewhere. Checking for the pipe alone raced, because two copies
 started together could both find no pipe and both become the server. The
-QLocalServer (a named pipe on Windows) only carries the "show" message.
+QLocalServer (a named pipe on Windows) only carries messages: "show", and
+"add:<path>" from File Explorer's "Add to Dash".
 """
 import getpass
 import logging
@@ -23,6 +24,19 @@ from PyQt6.QtNetwork import QLocalServer, QLocalSocket
 log = logging.getLogger(__name__)
 
 SHOW_MESSAGE = b"show"
+# "Add to Dash" in File Explorer: the path follows the prefix, as UTF-8.
+ADD_MESSAGE_PREFIX = b"add:"
+
+
+def add_message(path: str) -> bytes:
+    return ADD_MESSAGE_PREFIX + path.encode("utf-8")
+
+
+def path_from_add_message(message: bytes) -> str | None:
+    if not message.startswith(ADD_MESSAGE_PREFIX):
+        return None
+    path = message[len(ADD_MESSAGE_PREFIX) :].decode("utf-8", errors="replace").strip()
+    return path or None
 CONNECT_TIMEOUT_MS = 500
 HANDOFF_TIMEOUT_MS = 2000
 # The first copy creates its server only after loading settings and building
@@ -110,7 +124,20 @@ def acquire_instance_lock(name: str | None = None) -> InstanceLock | None:
 _instance_lock: InstanceLock | None = None
 
 
+def _allow_running_copy_to_come_forward():
+    # This copy was started by a click, so Windows lets it bring a window to
+    # the front; pass that on to the running Dash, which shows the launcher.
+    if sys.platform == "win32":
+        try:
+            import ctypes
+
+            ctypes.windll.user32.AllowSetForegroundWindow(-1)  # ASFW_ANY
+        except Exception:
+            log.debug("AllowSetForegroundWindow failed", exc_info=True)
+
+
 def _send(message: bytes) -> bool:
+    _allow_running_copy_to_come_forward()
     socket = QLocalSocket()
     socket.connectToServer(server_name())
     if not socket.waitForConnected(CONNECT_TIMEOUT_MS):

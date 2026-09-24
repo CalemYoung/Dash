@@ -32,7 +32,7 @@
 - **Add from anywhere:** Copy a file or folder in Explorer and press `Ctrl+V` in Dash, or drop a file, shortcut or link on it, to make it a command. Type something that matches nothing and Dash offers to add it.
 - **Icons you pick:** Every command gets one on its own, and you can swap in a library glyph or your own image, recolor it, or go back to the one Dash found.
 - **Take it with you:** Export commands to a portable file and import them on another PC, icons and all.
-- **Made to fit:** Light, dark or system theme, size, hotkeys, the display Dash opens on, the browser websites use, the web search engine, fonts, colors, the clock and the update check are all settings.
+- **Made to fit:** Light, dark or system theme, size, hotkeys, the display Dash opens on, the browser websites use, the web search engine, text sizes, the clock and the update check are all settings.
 
 ## Why another launcher?
 
@@ -91,15 +91,6 @@ targets are other commands, and it opens them in the order they are listed.
    <img src="assets/command-group.gif" alt="The Start work group open in the editor, where Steam is typed and added to the commands it opens" width="400">
 </p>
 
-### Command tree (optional)
-
-A side panel, off by default, that shows how each letter you type narrows
-the matches. Turn it on under Settings if you like to see it.
-
-<p align="left">
-   <img src="assets/command-tree.gif" alt="The command tree panel narrowing from s, through st, to Start work" width="600">
-</p>
-
 ## Keys
 
 | Key | What it does |
@@ -112,7 +103,7 @@ the matches. Turn it on under Settings if you like to see it.
 | `Shift+Enter` | Open a new copy, even if the app is already open |
 | `Ctrl+Shift+Enter` | Run the selected app as administrator |
 | `Alt+Enter` | Open the folder that holds the selected command |
-| Right-click, or `Shift+F10` | More actions for the selected result |
+| Right-click, or the `Menu` key | More actions for the selected result |
 | `Ctrl+N` | Add a new command |
 | `Ctrl+,` | Open Settings |
 | `Esc` | Close Dash |
@@ -121,9 +112,9 @@ The hotkey and the three `Ctrl` shortcuts are yours to change under Settings.
 
 ## Beyond opening things
 
-- **Nothing matches?** Dash offers to add what you typed as a new command, or
-  to search the web for it. Turn on "Web search unknown commands" in Settings
-  to put the web search first.
+- **Nothing matches?** Dash offers to add what you typed as a new command.
+  Turn on "Web search unknown commands" in Settings to also offer a web
+  search for it, first in the list.
 - **Groups carry on.** A target that has been deleted or will not open is
   reported when the group finishes, rather than stopping the ones after it.
 - **Switch instead of relaunch.** If an app's window is already open, Dash

@@ -16,6 +16,8 @@ from pathlib import Path
 from PyQt6.QtCore import QObject, QUrl, pyqtSignal
 from PyQt6.QtNetwork import QNetworkAccessManager, QNetworkReply, QNetworkRequest
 
+from .child_process import clean_dll_search
+
 log = logging.getLogger(__name__)
 
 INSTALLER_PREFIX = "DashSetup-"
@@ -323,11 +325,12 @@ class UpdateDownloader(QObject):
 def launch_installer(installer_path: str) -> bool:
     """Start the silent upgrade. The caller should quit right after."""
     try:
-        subprocess.Popen(
-            [installer_path, *INSTALLER_ARGS],
-            close_fds=True,
-            creationflags=getattr(subprocess, "DETACHED_PROCESS", 0),
-        )
+        with clean_dll_search():
+            subprocess.Popen(
+                [installer_path, *INSTALLER_ARGS],
+                close_fds=True,
+                creationflags=getattr(subprocess, "DETACHED_PROCESS", 0),
+            )
         return True
     except OSError:
         return False

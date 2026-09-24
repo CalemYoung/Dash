@@ -7,7 +7,7 @@ launcher and the demos follow.
 
     .\\.venv\\Scripts\\python.exe build\\scripts\\record_demos.py
 
-Takes the scene names to record (search, site, group, editor, tree) or none for
+Takes the scene names to record (search, site, group, editor) or none for
 all of them, and writes each one into assets/.
 """
 
@@ -134,7 +134,7 @@ def prepare_environment():
     sys.path.insert(0, str(ROOT))
 
 
-def write_config(show_command_tree=False):
+def write_config():
     config = WORKDIR / "config"
     config.mkdir(parents=True, exist_ok=True)
     settings_text = (ROOT / "config/settings.default.toml").read_text(encoding="utf-8")
@@ -144,9 +144,7 @@ def write_config(show_command_tree=False):
     # not cover is blank space on the page. Three rows is enough to show a
     # list narrowing without making every other frame pay for five.
     settings_text = settings_text.replace("max_results = 20", "max_results = 3")
-    if show_command_tree:
-        settings_text = settings_text.replace("show_command_tree = false", "show_command_tree = true")
-    settings_path = config / f"settings{'-tree' if show_command_tree else ''}.toml"
+    settings_path = config / "settings.toml"
     settings_path.write_text(settings_text, encoding="utf-8")
     commands_path = config / "commands.toml"
     commands_path.write_text(DEMO_COMMANDS, encoding="utf-8")
@@ -292,12 +290,12 @@ def save_gif(frames, path, colors=255):
     print(f"{path.name}: {len(frames)} frames, {path.stat().st_size / 1024:.0f} KB, {width}x{height}")
 
 
-def launcher(app, show_command_tree=False):
+def launcher(app):
     from src.command_manager import CommandManager
     from src.launcher_gui import MainWindow
     from src.settings import Settings
 
-    settings_path, commands_path = write_config(show_command_tree)
+    settings_path, commands_path = write_config()
     settings = Settings.load_or_create_default(settings_path)
     cmd_manager = CommandManager(commands_path, settings=settings)
     window = MainWindow(cmd_manager, settings, settings_path=settings_path)
@@ -398,27 +396,11 @@ def scene_editor(app):
     return recorder.frames
 
 
-def scene_tree(app):
-    """The tree panel narrowing from one letter to one command."""
-    window = launcher(app, show_command_tree=True)
-    search = window.search_input_widget
-    recorder = Recorder(app, window)
-
-    recorder.type(search, "s", per_char=1400)
-    recorder.type(search, "t", per_char=1400)
-    recorder.type(search, "a", per_char=1000)
-    recorder.hold(1600)
-
-    window.close()
-    return recorder.frames
-
-
 SCENES = {
     "search": ("launcher-search.gif", scene_search),
     "site": ("site-search.gif", scene_site_search),
     "group": ("command-group.gif", scene_group),
     "editor": ("command-editor.gif", scene_editor),
-    "tree": ("command-tree.gif", scene_tree),
 }
 
 

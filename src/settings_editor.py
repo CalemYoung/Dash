@@ -6,7 +6,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, cast
 
-from PyQt6.QtCore import QEvent, QFileInfo, QPointF, QRect, QSize, Qt, QTimer, pyqtSignal
+from PyQt6.QtCore import QEvent, QFileInfo, QObject, QPointF, QRect, QSize, Qt, QTimer, pyqtSignal
 from PyQt6.QtGui import QColor, QIcon, QKeySequence, QLinearGradient, QPainter, QPen, QShortcut
 from PyQt6.QtWidgets import (
     QApplication,
@@ -15,7 +15,6 @@ from PyQt6.QtWidgets import (
     QDialog,
     QDialogButtonBox,
     QDoubleSpinBox,
-    QColorDialog,
     QFileIconProvider,
     QFormLayout,
     QFrame,
@@ -36,7 +35,7 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
-from . import theme
+from . import explorer_menu, theme
 
 log = logging.getLogger(__name__)
 
@@ -119,12 +118,15 @@ SIZE_KEYS = ("program_width", "search_height", "results_height", "search_font_si
 SIZE_CUSTOM = "custom"
 # Medium is what Dash ships with. Results heights hold five whole rows at each
 # size; the launcher snaps the list to whole rows either way.
+# Not a settings.toml key: the toggle reads and writes the registry.
+EXPLORER_MENU_KEY = "explorer_menu"
+
 SIZE_PRESETS: dict[str, dict[str, int]] = {
     "small": {
         "program_width": 520,
         "search_height": 58,
         "results_height": 248,
-        "search_font_size": 20,
+        "search_font_size": 18,
         "result_font_size": 12,
         "description_font_size": 9,
     },
@@ -132,17 +134,17 @@ SIZE_PRESETS: dict[str, dict[str, int]] = {
         "program_width": 600,
         "search_height": 70,
         "results_height": 288,
-        "search_font_size": 24,
-        "result_font_size": 14,
+        "search_font_size": 20,
+        "result_font_size": 13,
         "description_font_size": 10,
     },
     "large": {
         "program_width": 720,
         "search_height": 84,
         "results_height": 348,
-        "search_font_size": 28,
-        "result_font_size": 16,
-        "description_font_size": 12,
+        "search_font_size": 24,
+        "result_font_size": 15,
+        "description_font_size": 11,
     },
 }
 SIZE_LABELS = (("small", "Small"), ("medium", "Medium"), ("large", "Large"), (SIZE_CUSTOM, "Custom"))
@@ -288,6 +290,27 @@ class NoScrollComboBox(QComboBox):
             event.ignore()
 
 
+class _HotkeyRecording(QObject):
+    """Says when a HotkeyLineEdit starts and stops recording keys.
+
+    While one is recording, the global hotkey has to be paused: Windows gives
+    its combination to the hotkey before any window sees it, so it could never
+    be recorded, and pressing it would open or hide Dash instead.
+    """
+
+    changed = pyqtSignal(bool)
+
+
+_hotkey_recording = None
+
+
+def hotkey_recording() -> _HotkeyRecording:
+    global _hotkey_recording
+    if _hotkey_recording is None:
+        _hotkey_recording = _HotkeyRecording()
+    return _hotkey_recording
+
+
 class HotkeyLineEdit(QLineEdit):
     """Read-only editor that records the next key combination pressed."""
 
@@ -296,6 +319,32 @@ class HotkeyLineEdit(QLineEdit):
         self.setReadOnly(True)
         self.setPlaceholderText("Press a key combination")
         self.setToolTip("Click here, then press the key combination to use")
+        self._recording = False
+
+    def _set_recording(self, recording: bool):
+        if recording != self._recording:
+            self._recording = recording
+            hotkey_recording().changed.emit(recording)
+
+    def focusInEvent(self, event):
+        super().focusInEvent(event)
+        self._set_recording(True)
+
+    def focusOutEvent(self, event):
+        self._set_recording(False)
+        super().focusOutEvent(event)
+
+    def hideEvent(self, event):
+        self._set_recording(False)
+        super().hideEvent(event)
+
+    def event(self, event):
+        # Every key is for recording, including ones Dash's own shortcuts
+        # (Ctrl+N, Alt+Enter) would otherwise take before it arrives here.
+        if event.type() == QEvent.Type.ShortcutOverride:
+            event.accept()
+            return True
+        return super().event(event)
 
     def keyPressEvent(self, event):
         modifier_keys = {
@@ -313,50 +362,6 @@ class HotkeyLineEdit(QLineEdit):
         if text:
             self.setText(text)
         event.accept()
-
-
-class ColorButton(QPushButton):
-    colorChanged = pyqtSignal(str)
-
-    def __init__(self, value, parent=None):
-        super().__init__(parent)
-        # An empty value means "follow the theme"; it stays empty until a
-        # color is actually picked, so opening Settings changes nothing.
-        color = QColor(str(value)) if str(value).strip() else QColor()
-        self._color = color if color.isValid() else None
-        self.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.setMinimumWidth(84)
-        self.clicked.connect(self._choose_color)
-        theme.notifier().changed.connect(self._update_swatch)
-        self._update_swatch()
-
-    def color(self) -> str:
-        return self._color.name(QColor.NameFormat.HexRgb) if self._color is not None else ""
-
-    def _choose_color(self):
-        selected = QColorDialog.getColor(self._color or QColor(Qt.GlobalColor.white), self, "Choose Text Color")
-        if not selected.isValid() or selected == self._color:
-            return
-        self._color = selected
-        self._update_swatch()
-        self.colorChanged.emit(self.color())
-
-    def _update_swatch(self, _theme_name=None):
-        color = self.color()
-        border = theme.color_name("swatch_border")
-        if not color:
-            self.setText("Theme")
-            self.setToolTip("Follows the theme. Click to choose a color.")
-            self.setStyleSheet(f"border: 1px solid {border}; border-radius: 6px; padding: 6px 10px;")
-            return
-        # Whichever of near-black and white reads better on the swatch.
-        text_color = "#111318" if theme.contrast_ratio(self._color, QColor("#111318")) >= theme.contrast_ratio(self._color, QColor("#ffffff")) else "#ffffff"
-        self.setText(color.upper())
-        self.setToolTip("Click to choose a different color")
-        self.setStyleSheet(
-            f"background-color: {color}; color: {text_color}; "
-            f"border: 1px solid {border}; border-radius: 6px; padding: 6px 10px;"
-        )
 
 
 class XCheckBox(QCheckBox):
@@ -707,13 +712,6 @@ class SettingsEditorPanel(QFrame):
         return control
 
     @staticmethod
-    def _color(value, accessible_name: str = ""):
-        control = ColorButton(value)
-        if accessible_name:
-            control.setAccessibleName(accessible_name)
-        return control
-
-    @staticmethod
     def _note():
         """A small line of text under a field: a warning or a validation message."""
         label = QLabel()
@@ -769,6 +767,17 @@ class SettingsEditorPanel(QFrame):
         self._web_search_custom.setAccessibleName("Custom web search address")
         self._web_search_problem = self._note()
         self._hotkey_warning = self._note()
+        # Read from the registry, not settings.toml: the installer's checkbox
+        # can turn it on too, and this toggle has to show what is really there.
+        self._explorer_menu_initial = explorer_menu.is_enabled()
+        explorer_menu_check = self._check(
+            self._explorer_menu_initial,
+            "Adds “Add to Dash” to the right-click menu of files, folders and shortcuts in File Explorer. "
+            "On Windows 11 it is under “Show more options”.",
+        )
+        if not explorer_menu.available():
+            explorer_menu_check.setEnabled(False)
+            explorer_menu_check.setToolTip("Available in the installed version of Dash")
 
         group = self._group(
             "General",
@@ -778,6 +787,7 @@ class SettingsEditorPanel(QFrame):
                 ("Websites open in", "general.browser", self._choice(general.browser, browser_options(general.browser))),
                 ("Check updates at startup", "general.check_updates_on_startup", self._check(general.check_updates_on_startup)),
                 ("Switch to apps already open", "general.switch_to_open_apps", self._check(general.switch_to_open_apps)),
+                ("Add to Dash in File Explorer", EXPLORER_MENU_KEY, explorer_menu_check),
                 (
                     "Hide when clicking elsewhere",
                     "general.hide_when_focus_lost",
@@ -896,35 +906,10 @@ class SettingsEditorPanel(QFrame):
         return self._group(
             "Text",
             [
-                (
-                    "Search box",
-                    [
-                        ("ui.search_font_size", size(ui.search_font_size, 8, 48, "Search box text size")),
-                        ("ui.search_text_color", self._color(ui.search_text_color, "Search box text color")),
-                    ],
-                ),
-                (
-                    "Result names",
-                    [
-                        ("ui.result_font_size", size(ui.result_font_size, 8, 32, "Result name text size")),
-                        ("ui.result_text_color", self._color(ui.result_text_color, "Result name text color")),
-                    ],
-                ),
-                (
-                    "Descriptions",
-                    [
-                        ("ui.description_font_size", size(ui.description_font_size, 7, 24, "Description text size")),
-                        ("ui.description_text_color", self._color(ui.description_text_color, "Description text color")),
-                    ],
-                ),
+                ("Search box", "ui.search_font_size", size(ui.search_font_size, 8, 48, "Search box text size")),
+                ("Result names", "ui.result_font_size", size(ui.result_font_size, 8, 32, "Result name text size")),
+                ("Descriptions", "ui.description_font_size", size(ui.description_font_size, 7, 24, "Description text size")),
                 ("Clock size", "ui.clock_font_size", self._spin(ui.clock_font_size, 6, 18)),
-                (
-                    "Clock day, date",
-                    [
-                        ("ui.clock_day_text_color", self._color(ui.clock_day_text_color, "Clock day text color")),
-                        ("ui.clock_date_text_color", self._color(ui.clock_date_text_color, "Clock date text color")),
-                    ],
-                ),
             ],
         )
 
@@ -1023,8 +1008,6 @@ class SettingsEditorPanel(QFrame):
 
     def _value(self, key) -> Any:
         control = self._controls[key]
-        if isinstance(control, ColorButton):
-            return control.color()
         if isinstance(control, QComboBox):
             return control.currentData()
         if isinstance(control, QCheckBox):
@@ -1054,15 +1037,10 @@ class SettingsEditorPanel(QFrame):
                 editor_height=self._value("ui.editor_height"),
                 window_opacity=self._value("ui.window_opacity"),
                 search_font_size=self._value("ui.search_font_size"),
-                search_text_color=self._value("ui.search_text_color"),
                 result_font_size=self._value("ui.result_font_size"),
-                result_text_color=self._value("ui.result_text_color"),
                 description_font_size=self._value("ui.description_font_size"),
-                description_text_color=self._value("ui.description_text_color"),
                 show_clock=self._value("ui.show_clock"),
                 clock_font_size=self._value("ui.clock_font_size"),
-                clock_day_text_color=self._value("ui.clock_day_text_color"),
-                clock_date_text_color=self._value("ui.clock_date_text_color"),
             ),
             search=SearchSettings(
                 max_results=self._value("search.max_results"),
@@ -1083,10 +1061,14 @@ class SettingsEditorPanel(QFrame):
             paths=self._settings.paths,
         )
 
+    def _explorer_menu_changed(self) -> bool:
+        return bool(self._value(EXPLORER_MENU_KEY)) != self._explorer_menu_initial
+
     def _is_dirty(self) -> bool:
         current = self._collect()
         return (
-            asdict(current.general) != asdict(self._settings.general)
+            self._explorer_menu_changed()
+            or asdict(current.general) != asdict(self._settings.general)
             or asdict(current.ui) != asdict(self._settings.ui)
             or asdict(current.search) != asdict(self._settings.search)
             or asdict(current.shortcuts) != asdict(self._settings.shortcuts)
@@ -1106,9 +1088,7 @@ class SettingsEditorPanel(QFrame):
 
     def _connect_signals(self):
         for key, control in self._controls.items():
-            if isinstance(control, ColorButton):
-                control.colorChanged.connect(self._update_dirty_state)
-            elif isinstance(control, QComboBox):
+            if isinstance(control, QComboBox):
                 control.currentIndexChanged.connect(self._update_dirty_state)
             elif isinstance(control, QLineEdit):
                 control.textChanged.connect(self._update_dirty_state)
@@ -1138,6 +1118,12 @@ class SettingsEditorPanel(QFrame):
             )
             QMessageBox.warning(self, "Settings", message)
             return
+        if self._explorer_menu_changed():
+            try:
+                explorer_menu.set_enabled(bool(self._value(EXPLORER_MENU_KEY)))
+            except OSError:
+                log.error("Could not change the File Explorer menu", exc_info=True)
+                QMessageBox.warning(self, "Settings", "Dash couldn't change the File Explorer menu. Your other settings were saved.")
         theme_changed = settings.ui.theme != self._settings.ui.theme
         if theme_changed:
             # Re-theme before the window reacts to the new settings, so

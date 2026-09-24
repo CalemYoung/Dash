@@ -37,5 +37,5 @@ def key_sequences(shortcut: str) -> list[QKeySequence]:
 
 
 def format_shortcut(shortcut: str) -> str:
-    """'ctrl+return' -> 'Ctrl + Enter', for hints and the About box."""
-    return " + ".join(_DISPLAY_NAMES.get(part.strip().lower(), part.strip().upper()) for part in shortcut.split("+"))
+    """'ctrl+return' -> 'Ctrl+Enter', for hints and the About box."""
+    return "+".join(_DISPLAY_NAMES.get(part.strip().lower(), part.strip().upper()) for part in shortcut.split("+"))

@@ -1,12 +1,12 @@
 from PyQt6.QtCore import QDate, QEasingCurve, QEvent, QLocale, QPointF, QRectF, QSize, Qt, QThread, QTimer, QPropertyAnimation, QUrl, pyqtSignal
 from PyQt6.QtWidgets import QMainWindow, QLineEdit, QVBoxLayout, QHBoxLayout, QWidget, QStackedWidget, QPushButton
 from PyQt6.QtWidgets import QListWidget, QMessageBox, QSystemTrayIcon, QMenu, QApplication, QErrorMessage, QLabel, QListWidgetItem
-from PyQt6.QtWidgets import QGraphicsOpacityEffect, QFileDialog, QProgressDialog, QToolButton
-from PyQt6.QtGui import QBrush, QContextMenuEvent, QFont, QFontMetrics, QIcon, QAction, QDesktopServices, QMouseEvent, QPainter, QPen, QPixmap, QCursor, QScreen, QKeySequence, QShortcut, QColor
+from PyQt6.QtWidgets import QGraphicsOpacityEffect, QFileDialog, QProgressDialog, QToolButton, QToolTip
+from PyQt6.QtGui import QBrush, QContextMenuEvent, QFont, QFontMetrics, QIcon, QAction, QDesktopServices, QMouseEvent, QPainter, QPen, QPixmap, QCursor, QScreen, QKeySequence, QShortcut
 from PyQt6.QtNetwork import QNetworkAccessManager, QNetworkReply, QNetworkRequest
 from .settings import Settings
 from .settings_editor import ExportCommandsDialog, ImportCommandsDialog, ManageCommandsDialog, ProgramImportDialog, SettingsEditorPanel
-from .settings_editor import delete_confirmation_text
+from .settings_editor import delete_confirmation_text, hotkey_recording
 from .window_placement import available_geometry_for, clamp_size_to_screen, move_within_screen, pin_within_screen
 from .icon_manager import IconManager
 from .command_manager import CommandsFileUnreadableError
@@ -17,6 +17,7 @@ from . import app_log, browsers, calculator, theme
 from .popular_websites import POPULAR_WEBSITES
 from .browsers import fill_query, is_search_link
 from .browsers import open_url as open_in_browser
+from .child_process import clean_dll_search
 from .icon_browser import glyph_pixmap, OutlineIcon
 from .installed_programs import is_link_location
 from .version import current_version, is_newer_version
@@ -138,14 +139,9 @@ class ProgramDiscoveryThread(QThread):
 _key_sequences = key_sequences
 
 
-def _text_style(color_value: str, point_size: int | None = None) -> str:
-    declarations = []
-    if point_size is not None:
-        declarations.append(f"font-size: {point_size}pt")
-    color = QColor(str(color_value))
-    if color.isValid():
-        declarations.append(f"color: {color.name(QColor.NameFormat.HexRgb)}")
-    return "; ".join(declarations) + ";"
+def _font_size_style(point_size: int) -> str:
+    # Only the size: text colors come from the theme, in style.qss.
+    return f"font-size: {point_size}pt;"
 
 
 class SearchTreeWidget(QWidget):
@@ -452,7 +448,7 @@ class MainWindow(QMainWindow):
             "Ctrl+Shift+Enter  Run as administrator",
             "Alt+Enter  Open the containing folder",
             "Ctrl+C  Copy the path or address",
-            "Shift+F10 or the Menu key  More actions",
+            "Right-click or the Menu key  More actions",
             "Esc  Close Dash",
         ]
 
@@ -482,7 +478,7 @@ class MainWindow(QMainWindow):
         # 2.2: Create search box input widget for user searching
         self.search_input_widget = QLineEdit()
         self.search_input_widget.setObjectName("SearchInput")
-        self.search_input_widget.setPlaceholderText("Type an app, file, website or sum...")
+        self.search_input_widget.setPlaceholderText("Type to search…")
         self.search_input_widget.setAccessibleName("Search commands")
         self.search_input_widget.setAccessibleDescription("Type to find a command. Up and Down choose a result, Enter opens it.")
         # Drops go to the window, which turns them into new commands, rather
@@ -531,9 +527,15 @@ class MainWindow(QMainWindow):
         self.shortcut_hint_label.setAccessibleName("Keyboard shortcuts")
         # The rest of the keys do not fit in the footer: they are a tooltip
         # here and are listed in the About box.
-        self.keys_hint_label = QLabel("Keys")
-        self.keys_hint_label.setObjectName("ShortcutHint")
-        self.keys_hint_label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        # A keyboard icon, not the word "Keys", which read as plain text.
+        # Hovering shows the list; clicking shows it at once.
+        self.keys_hint_label = QToolButton()
+        self.keys_hint_label.setObjectName("ResultEditButton")
+        self.keys_hint_label.setIconSize(QSize(20, 20))
+        self.keys_hint_label.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.keys_hint_label.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self.keys_hint_label.clicked.connect(self._show_keys_help)
+        self._update_keys_hint_icon()
         self.keys_hint_label.setToolTip("\n".join(self._keys_help_lines()))
         self.keys_hint_label.setAccessibleName("More keys")
         self.keys_hint_label.setAccessibleDescription("; ".join(self._keys_help_lines()))
@@ -713,9 +715,7 @@ class MainWindow(QMainWindow):
         self.settings_shortcut.activated.connect(self.open_settings_from_search)
 
     def _apply_search_text_style(self):
-        self.search_input_widget.setStyleSheet(
-            _text_style(self.settings.ui.search_text_color, self.settings.ui.search_font_size)
-        )
+        self.search_input_widget.setStyleSheet(_font_size_style(self.settings.ui.search_font_size))
 
     @staticmethod
     def _month_day_format(locale: QLocale) -> str:
@@ -731,8 +731,8 @@ class MainWindow(QMainWindow):
     def _apply_clock_text_style(self):
         day_size = self.settings.ui.clock_font_size
         date_size = max(6, day_size - 1)
-        self.date_info_day_label.setStyleSheet(_text_style(self.settings.ui.clock_day_text_color, day_size))
-        self.date_info_date_label.setStyleSheet(_text_style(self.settings.ui.clock_date_text_color, date_size))
+        self.date_info_day_label.setStyleSheet(_font_size_style(day_size))
+        self.date_info_date_label.setStyleSheet(_font_size_style(date_size))
         self.date_info_day_label.setFixedHeight(self.date_info_day_label.fontMetrics().height() + 2)
         self.date_info_date_label.setFixedHeight(self.date_info_date_label.fontMetrics().height() + 2)
         # Wide enough for the longest day and month names in this language.
@@ -767,6 +767,10 @@ class MainWindow(QMainWindow):
             # The Menu key may also arrive as a keyboard context menu event;
             # it is the selected row's menu, never the box's edit menu. The
             # mouse still gets the edit menu.
+            if event.reason() == QContextMenuEvent.Reason.Keyboard and QApplication.keyboardModifiers() & Qt.KeyboardModifier.ShiftModifier:
+                # Windows turns Shift+F10 into this event too. Dash doesn't
+                # use Shift+F10, so it opens neither menu.
+                return True
             if event.reason() == QContextMenuEvent.Reason.Keyboard and self.get_selected_row() is not None:
                 if self._row_menu_from_key:
                     self._row_menu_from_key = False
@@ -806,7 +810,9 @@ class MainWindow(QMainWindow):
             # hides Dash, since starting one clicks away from it).
             if event.matches(QKeySequence.StandardKey.Paste) and self._paste_copied_file():
                 return True
-            if key == Qt.Key.Key_Menu or (key == Qt.Key.Key_F10 and modifiers == Qt.KeyboardModifier.ShiftModifier):
+            if key == Qt.Key.Key_F10 and modifiers == Qt.KeyboardModifier.ShiftModifier:
+                return True
+            if key == Qt.Key.Key_Menu:
                 if self.get_selected_row() is not None:
                     # A context menu event for the same key press may follow.
                     self._row_menu_from_key = True
@@ -1381,7 +1387,8 @@ class MainWindow(QMainWindow):
 
     def open_latest_release(self):
         url = self._latest_release.page_url if self._latest_release is not None else LATEST_RELEASE_PAGE
-        QDesktopServices.openUrl(QUrl(url))
+        with clean_dll_search():
+            QDesktopServices.openUrl(QUrl(url))
 
     # -- installing updates ---------------------------------------------------
 
@@ -1485,6 +1492,13 @@ class MainWindow(QMainWindow):
         failed = getattr(listener, "registrationFailed", None)
         if failed is not None:
             failed.connect(self._on_hotkey_registration_failed)
+        hotkey_recording().changed.connect(self._on_hotkey_recording)
+
+    def _on_hotkey_recording(self, recording: bool):
+        listener = self._hotkey_listener
+        method = getattr(listener, "pause" if recording else "resume", None)
+        if callable(method):
+            method()
 
     def _settings_path(self):
         if self._loaded_settings_path is not None:
@@ -1629,8 +1643,18 @@ class MainWindow(QMainWindow):
         self.search_tree_widget.update()
         self._apply_search_text_style()
         self._apply_clock_text_style()
+        self._update_keys_hint_icon()
         if self.view_stack.currentWidget() is self.central_widget and self.results_list_widget.count():
             self._refresh_results()
+
+    def _update_keys_hint_icon(self):
+        # Drawn at three times the size: small glyphs lose the keys inside
+        # the outline, and QIcon scales the large one down smoothly.
+        self.keys_hint_label.setIcon(QIcon(glyph_pixmap(OutlineIcon.KEYBOARD, 60, theme.color("launcher_muted"))))
+
+    def _show_keys_help(self):
+        button = self.keys_hint_label
+        QToolTip.showText(button.mapToGlobal(button.rect().bottomLeft()), button.toolTip(), button)
 
     def open_config_folder(self):
         """Open the folder holding settings.toml and commands.toml in Explorer."""
@@ -1652,7 +1676,8 @@ class MainWindow(QMainWindow):
 
     def _open_folder(self, folder: Path):
         try:
-            os.startfile(folder)
+            with clean_dll_search():
+                os.startfile(folder)
         except OSError:
             log.exception("Could not open %s", folder)
             self.display_error_popup(f"Windows couldn't open the folder:\n{folder}")
@@ -1887,7 +1912,7 @@ class MainWindow(QMainWindow):
         return True
 
     def show_selected_row_menu(self):
-        """The Menu key or Shift+F10: the selected row's menu, under the row."""
+        """The Menu key: the selected row's menu, under the row."""
         item = self.results_list_widget.currentItem()
         row = self.get_selected_row()
         if item is None or row is None:
@@ -1976,14 +2001,13 @@ class MainWindow(QMainWindow):
         )
         return row
 
-    def _show_web_search_row(self, text: str, even_when_off: bool = False) -> bool:
+    def _show_web_search_row(self, text: str) -> bool:
         """Offer to search the web for text nothing matched. False when there
         is nothing to search for, no usable search address, or the setting
-        is off (unless `even_when_off`: then it is offered after "Add")."""
+        is off."""
         template = str(self.settings.general.web_search or "").strip()
         text = text.strip()
-        enabled = self.settings.general.web_search_enabled
-        if not text or not (enabled or even_when_off) or not is_search_link(template):
+        if not text or not self.settings.general.web_search_enabled or not is_search_link(template):
             return False
 
         def search():
@@ -1999,41 +2023,39 @@ class MainWindow(QMainWindow):
             self,
             icon_path=self.settings.paths.url_command_icon,
             command=f"Search the web for “{text}”",
-            description="No commands match. Press Enter to search in your browser." if enabled else "Opens in your browser",
+            description="Press Enter to search in your browser",
             action=search,
         )
         self._add_row(row)
         self.results_list_widget.setCurrentRow(0)
         return True
 
-    def _show_add_command_row(self, text: str) -> bool:
-        """Offer to make what was typed into a command: as its target when
-        it reads as a path or web address, otherwise as its name."""
+    def _show_no_match_row(self, text: str) -> bool:
+        """Say that nothing matched, and how to add it as a command.
+
+        Only for reading: it can't be selected, so it is never highlighted
+        and Enter never acts on it. A mistyped name and a quick Enter should
+        not open the editor; the new command shortcut does, with the typed
+        text filled in."""
         text = text.strip()
         if not text:
             return False
-        target = target_from_text(text)
+        shortcut = self._format_shortcut(self.settings.shortcuts.new_command)
         row = ResultRow(
             self,
-            icon_path=self.settings.paths.default_command_icon,
-            icon_pixmap=glyph_pixmap(OutlineIcon.PLUS, ResultRow.ICON_SIZE, theme.color("text")),
-            command=f"Add “{text}” as a command",
-            description="Press Enter to open the new command editor with this filled in",
-            action=lambda: self.open_new_command_with(name=None if target else text, target=target),
+            icon_path=self.settings.paths.no_result_icon,
+            command=f"No commands match “{text}”",
+            description=f"Press {shortcut} to add it as a command",
         )
-        self._add_row(row)
+        item = self._add_row(row)
+        item.setFlags(Qt.ItemFlag.NoItemFlags)
         return True
 
     def _show_no_results(self, text: str):
-        """Nothing matched: offer to add it as a command, and to search the
-        web. With web search switched on the search comes first, as before."""
-        search_first = bool(self.settings.general.web_search_enabled)
-        if search_first:
-            self._show_web_search_row(text)
-        self._show_add_command_row(text)
-        if not search_first:
-            self._show_web_search_row(text, even_when_off=True)
-        self.results_list_widget.setCurrentRow(0)
+        """Nothing matched: a web search first, selected, when that setting
+        is on, then the line saying so and how to add it as a command."""
+        self._show_web_search_row(text)
+        self._show_no_match_row(text)
 
     def _show_calculation(self, text: str) -> bool:
         """A result row for a calculation, or its plain problem ("Can't
@@ -2111,6 +2133,13 @@ class MainWindow(QMainWindow):
         typed = self.user_text.strip() if self.isVisible() else ""
         target = target_from_text(typed)
         self.open_new_command_with(name=None if target or not typed else typed, target=target)
+
+    def add_from_explorer(self, path: str):
+        """"Add to Dash" in File Explorer's right-click menu: the new-command
+        editor with the file, folder or shortcut as its target."""
+        path = path.strip().strip('"')
+        if path:
+            self.open_new_command_with(target=os.path.normpath(path))
 
     def open_new_command_with(self, name: str | None = None, target: str | None = None):
         """Open the new-command editor with the name or target filled in."""
@@ -2514,12 +2543,15 @@ class MainWindow(QMainWindow):
 
         if event.key() == Qt.Key.Key_Escape:
             self.hide_launcher()
-        elif event.key() == Qt.Key.Key_Down and count > 0:
-            self.results_list_widget.setCurrentRow((row + 1) % count)
-            self._follow_selection()
-        elif event.key() == Qt.Key.Key_Up and count > 0:
-            self.results_list_widget.setCurrentRow((row - 1) % count)
-            self._follow_selection()
+        elif event.key() in (Qt.Key.Key_Down, Qt.Key.Key_Up) and count > 0:
+            step = 1 if event.key() == Qt.Key.Key_Down else -1
+            # Skip rows that are only for reading, like "No commands match".
+            for offset in range(1, count + 1):
+                target = (row + step * offset) % count
+                if self.results_list_widget.item(target).flags() & Qt.ItemFlag.ItemIsSelectable:
+                    self.results_list_widget.setCurrentRow(target)
+                    self._follow_selection()
+                    break
         else:
             super().keyPressEvent(event)
 
@@ -2728,7 +2760,6 @@ class ResultRow(QWidget):
         command_font = self.command_label.font()
         command_font.setPointSize(main_window.settings.ui.result_font_size)
         self.command_label.setFont(command_font)
-        self.command_label.setStyleSheet(_text_style(main_window.settings.ui.result_text_color))
 
         # Description label (gray, smaller)
         self.description_label = ElidedLabel(description, self)
@@ -2736,7 +2767,6 @@ class ResultRow(QWidget):
         description_font = self.description_label.font()
         description_font.setPointSize(main_window.settings.ui.description_font_size)
         self.description_label.setFont(description_font)
-        self.description_label.setStyleSheet(_text_style(main_window.settings.ui.description_text_color))
 
         # Run counter: a small pill on the right edge, styled in style.qss
         self.run_counter_label = QLabel(run_counter, self)

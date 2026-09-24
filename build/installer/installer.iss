@@ -88,6 +88,10 @@ Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{
 ; Ticked by default: Dash is a background hotkey launcher, so it is only
 ; useful once it is already running when you press its hotkey.
 Name: "startup"; Description: "Start {#MyAppName} automatically when Windows starts"; GroupDescription: "Startup Options:"
+; Unticked by default, and offered on first install only: after that the
+; Settings toggle owns it, and an upgrade (the in-app updater runs this
+; silently) must not undo a choice made there.
+Name: "explorermenu"; Description: "Add ""Add to Dash"" to the right-click menu in File Explorer"; GroupDescription: "File Explorer:"; Flags: unchecked; Check: IsFreshInstall
 
 [Files]
 ; Main executable and dependencies from PyInstaller output
@@ -135,6 +139,19 @@ Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueType: 
 ; to clean up.
 Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueType: none; ValueName: "{#MyAppName}"; Flags: deletevalue; Tasks: not startup
 
+; "Add to Dash" in File Explorer's right-click menu, for every file (shortcuts
+; included) and folder. Dash's Settings toggle writes the same keys
+; (src/explorer_menu.py), so keep the two in step.
+Root: HKCU; Subkey: "Software\Classes\*\shell\DashAdd"; ValueType: string; ValueName: ""; ValueData: "Add to Dash"; Tasks: explorermenu
+Root: HKCU; Subkey: "Software\Classes\*\shell\DashAdd"; ValueType: string; ValueName: "Icon"; ValueData: """{app}\{#MyAppExeName}"",0"; Tasks: explorermenu
+Root: HKCU; Subkey: "Software\Classes\*\shell\DashAdd\command"; ValueType: string; ValueName: ""; ValueData: """{app}\{#MyAppExeName}"" --add ""%1"""; Tasks: explorermenu
+Root: HKCU; Subkey: "Software\Classes\Directory\shell\DashAdd"; ValueType: string; ValueName: ""; ValueData: "Add to Dash"; Tasks: explorermenu
+Root: HKCU; Subkey: "Software\Classes\Directory\shell\DashAdd"; ValueType: string; ValueName: "Icon"; ValueData: """{app}\{#MyAppExeName}"",0"; Tasks: explorermenu
+Root: HKCU; Subkey: "Software\Classes\Directory\shell\DashAdd\command"; ValueType: string; ValueName: ""; ValueData: """{app}\{#MyAppExeName}"" --add ""%1"""; Tasks: explorermenu
+; Uninstalling removes it however it was turned on, installer or Settings.
+Root: HKCU; Subkey: "Software\Classes\*\shell\DashAdd"; Flags: uninsdeletekey dontcreatekey
+Root: HKCU; Subkey: "Software\Classes\Directory\shell\DashAdd"; Flags: uninsdeletekey dontcreatekey
+
 ; Register application
 Root: HKCU; Subkey: "Software\{#MyAppPublisher}\{#MyAppName}"; ValueType: string; ValueName: "InstallPath"; ValueData: "{app}"; Flags: uninsdeletekey
 Root: HKCU; Subkey: "Software\{#MyAppPublisher}\{#MyAppName}"; ValueType: string; ValueName: "Version"; ValueData: "{#MyAppVersion}"; Flags: uninsdeletekey
@@ -155,6 +172,29 @@ Filename: "taskkill"; Parameters: "/F /IM {#MyAppExeName}"; Flags: runhidden; Ru
 var
   AppDataPath: String;
   DeleteUserData: Boolean;
+  FreshInstall: Boolean;
+
+// Close a running Dash before Setup checks which files are in use, so the
+// "Preparing to Install" page doesn't ask about Dash itself; it still lists
+// any other app holding Dash's files. Dash keeps nothing unsaved outside an
+// open editor, and the in-app updater has already quit it, making this a
+// no-op there. The Launch Dash checkbox (or /RELAUNCH=1) starts it again.
+function PrepareToInstall(var NeedsRestart: Boolean): String;
+var
+  ResultCode: Integer;
+begin
+  if Exec(ExpandConstant('{sys}\taskkill.exe'), '/F /IM {#MyAppExeName}', '', SW_HIDE, ewWaitUntilTerminated, ResultCode) and (ResultCode = 0) then
+    // Let Windows release the exe and DLLs before they are checked.
+    Sleep(500);
+  Result := '';
+end;
+
+// No earlier Dash for this user. Decided in InitializeSetup, before
+// anything is written.
+function IsFreshInstall(): Boolean;
+begin
+  Result := FreshInstall;
+end;
 
 // Silent installs stay silent unless the caller asks for a relaunch.
 function ShouldLaunchAfterInstall(): Boolean;
@@ -166,6 +206,7 @@ end;
 function InitializeSetup(): Boolean;
 begin
   AppDataPath := ExpandConstant('{userappdata}\{#MyAppName}');
+  FreshInstall := not RegValueExists(HKCU, 'Software\{#MyAppPublisher}\{#MyAppName}', 'InstallPath');
   Result := True;
 end;
 
@@ -274,6 +315,37 @@ begin
   end;
 end;
 
+// The hotkey from the user's settings.toml, so an upgrade names the key they
+// actually use. The file exists by now: ssPostInstall creates it when missing.
+function CurrentHotkey(): String;
+var
+  Lines: TArrayOfString;
+  I, Stop: Integer;
+  Line, Quote: String;
+begin
+  Result := 'Alt+Space';
+  if not LoadStringsFromFile(AppDataPath + '\config\settings.toml', Lines) then
+    Exit;
+  for I := 0 to GetArrayLength(Lines) - 1 do
+  begin
+    Line := Trim(Lines[I]);
+    if (Pos('=', Line) > 0) and (Trim(Copy(Line, 1, Pos('=', Line) - 1)) = 'hotkey') then
+    begin
+      // hotkey = 'Alt+Space' or "Alt+Space"
+      Line := Trim(Copy(Line, Pos('=', Line) + 1, Length(Line)));
+      Quote := Copy(Line, 1, 1);
+      if (Quote = '"') or (Quote = '''') then
+      begin
+        Line := Copy(Line, 2, Length(Line));
+        Stop := Pos(Quote, Line);
+        if Stop > 1 then
+          Result := Copy(Line, 1, Stop - 1);
+      end;
+      Exit;
+    end;
+  end;
+end;
+
 // Show finish message with helpful info
 procedure CurPageChanged(CurPageID: Integer);
 begin
@@ -282,7 +354,7 @@ begin
     WizardForm.FinishedLabel.Caption := 
       'Setup has finished installing Dash on your computer.' + #13#10 + #13#10 +
       'Quick Start Guide:' + #13#10 +
-      '• Press Alt+Space (unless you have chosen another hotkey) to open Dash' + #13#10 +
+      '• Press ' + CurrentHotkey() + ' to open Dash' + #13#10 +
       '• Type to search your commands instantly' + #13#10 +
       '• Press Ctrl+, in Dash to open Settings' + #13#10 +
       '• Press Ctrl+N in Dash to add a command' + #13#10 + #13#10 +

@@ -15,7 +15,7 @@ check_updates_on_startup = true
 # When nothing matches, offer to search the web for what was typed. {query}
 # marks where the text goes.
 web_search = "https://www.google.com/search?q={query}"
-# Turn on to show "No results found" instead of the web search offer.
+# Turn on to also offer a web search, first, when nothing matches.
 web_search_enabled = false
 # Opening an app that is already running brings its window to the front
 # instead of starting another copy.
@@ -36,17 +36,11 @@ search_height = 70
 results_height = 288
 editor_height = 600
 window_opacity = 1.0
-search_font_size = 24
-# Text colors: leave empty ("") to follow the theme, or set "#rrggbb".
-search_text_color = ""
-result_font_size = 14
-result_text_color = ""
+search_font_size = 20
+result_font_size = 13
 description_font_size = 10
-description_text_color = ""
 show_clock = true
 clock_font_size = 10
-clock_day_text_color = ""
-clock_date_text_color = ""
 
 [search]
 max_results = 20

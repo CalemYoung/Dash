@@ -319,6 +319,7 @@ class HotkeyListener(QObject):
         self._native_hwnd: int | None = None
         self._hotkey_window = None
         self._native_filter: _WmHotkeyFilter | None = None
+        self._paused = False
         self._register()
         log.info("Hotkey listener registered: %s", hotkey)
 
@@ -467,8 +468,21 @@ class HotkeyListener(QObject):
             keyboard.suppress_hotkey = False
         self.uses_system_hotkey = False
 
+    def pause(self):
+        """Let the hotkey's keys through, while Settings records a new one."""
+        if not self._paused:
+            self._paused = True
+            self.stop()
+
+    def resume(self):
+        if self._paused:
+            self._paused = False
+            self._register()
+
     def update_hotkey(self, hotkey):
-        """Replace the registered hotkey without replacing the listener."""
+        """Replace the registered hotkey without replacing the listener.
+        While paused, the new one is registered on resume()."""
         self.stop()
         self.hotkey = hotkey
-        self._register()
+        if not self._paused:
+            self._register()

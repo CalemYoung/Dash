@@ -156,6 +156,22 @@ class ListenerTests(unittest.TestCase):
         self.assertIsNone(listener._native_filter)
         self.assertEqual(self.user32.UnregisterHotKey.call_count, 2)
 
+    def test_pausing_lets_the_keys_through_until_resumed(self):
+        # Settings pauses the hotkey while recording a new one, or Windows
+        # would hand the keys to the hotkey instead of the box.
+        self.user32.RegisterHotKey.return_value = 1
+        listener = HotkeyListener("Alt+Space")
+        self.addCleanup(listener.stop)
+        listener.pause()
+        self.assertEqual(self.user32.UnregisterHotKey.call_count, 1)
+        self.assertIsNone(listener._native_filter)
+        listener.update_hotkey("Ctrl+Shift+K")
+        self.assertEqual(self.user32.RegisterHotKey.call_count, 1, "not registered while paused")
+        listener.resume()
+        self.assertEqual(self.user32.RegisterHotKey.call_args.args[2:], (MOD_CONTROL | MOD_SHIFT | MOD_NOREPEAT, ord("K")))
+        listener.resume()
+        self.assertEqual(self.user32.RegisterHotKey.call_count, 2, "resume only registers once")
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -99,7 +99,7 @@ ResultRow[selected="true"] #ResultIconTile {
     background-color: {{results_edit_bg}};
 }
 
-/* Text colors the ui.*_text_color settings replace when they are set. */
+/* Launcher text colors come from the light and dark themes. */
 #ResultCommandLabel {
     font-weight: bold;
     color: {{result_text}};

@@ -96,7 +96,6 @@ class SettingsPanelTests(unittest.TestCase):
         self.settings.general.web_search = "http://google.com/search?q={query}"
         self.settings.ui.theme = "light"
         self.settings.ui.program_width = 777
-        self.settings.ui.search_text_color = "#123456"
         self.assertFalse(self._panel()._is_dirty())
 
         self.settings.general.web_search = "https://example.com/?s={query}"
@@ -204,7 +203,7 @@ class SettingsPanelTests(unittest.TestCase):
         for key, control in panel._controls.items():
             with self.subTest(key=key):
                 self.assertTrue(control.accessibleName())
-        self.assertEqual(panel._controls["ui.search_text_color"].accessibleName(), "Search box text color")
+        self.assertEqual(panel._controls["ui.search_font_size"].accessibleName(), "Search box text size")
 
     def test_labels_use_us_spelling(self):
         from PyQt6.QtWidgets import QLabel

@@ -88,7 +88,7 @@ DARK: dict[str, str] = {
     "pill_selected_text": "#c3c8d1",
     "footer_bg": "#181a1f",
     "launcher_muted": "#9299a6",
-    # Launcher text that the ui.*_text_color settings override when set
+    # Launcher text
     "search_text": "#f3f4f7",
     "result_text": "#e7e9ee",
     "description_text": "#9ca3b0",
@@ -186,7 +186,7 @@ LIGHT: dict[str, str] = {
     "pill_selected_text": "#262b33",
     "footer_bg": "#eceef2",
     "launcher_muted": "#555c69",
-    # Launcher text that the ui.*_text_color settings override when set
+    # Launcher text
     "search_text": "#111418",
     "result_text": "#1f2329",
     "description_text": "#535a67",
@@ -342,12 +342,6 @@ def color(token: str) -> QColor:
 def color_name(token: str) -> str:
     """``color(token)`` as "#rrggbb", for building small style sheets in code."""
     return color(token).name(QColor.NameFormat.HexRgb)
-
-
-def text_color(setting_value: str, token: str) -> QColor:
-    """A ui.*_text_color setting, or the theme's color when it is empty or invalid."""
-    custom = QColor(str(setting_value or "").strip()) if str(setting_value or "").strip() else QColor()
-    return custom if custom.isValid() else color(token)
 
 
 def relative_luminance(value) -> float:
