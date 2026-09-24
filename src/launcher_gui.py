@@ -2659,7 +2659,7 @@ class MainWindow(QMainWindow):
             "A quick command launcher for Windows.\n\n"
             "Keys:\n"
             f"{keys}\n\n"
-            "© 2025 Calem Young"
+            f"© 2025-{QDate.currentDate().year()} Calem Young"
         )
         with self._dialog_open():
             about_box.exec()

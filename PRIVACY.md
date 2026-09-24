@@ -13,7 +13,7 @@ Dash connects to the internet only for these things:
 | Downloading an update, only after you choose "Install and Restart" | `github.com` and GitHub's download servers | Do not choose it |
 | Website icons for website commands | The website itself (`/favicon.ico`), Google's favicon service (`www.google.com/s2/favicons`) and DuckDuckGo's (`icons.duckduckgo.com`). Each is sent the website's host name. | Settings: "Download website icons" |
 | Checking that a website address works, while you type one into the command editor | The website you typed | Do not use a website command |
-| Web search, only when you choose the "search the web" result | The search engine you picked in Settings, opened in your browser | Off until you turn it on in Settings |
+| Web search, only when you choose the "search the web" result | The search engine you picked in Settings, opened in your browser | Only when you choose that result |
 
 Opening a website command opens it in your browser; Dash itself does not
 fetch the page.

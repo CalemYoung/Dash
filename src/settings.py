@@ -67,8 +67,33 @@ def _from_section(cls, data: dict):
     Settings files written by older or newer versions of Dash may carry keys
     this version does not have; they should not stop the app from starting.
     """
-    known = {f.name for f in fields(cls)}
-    return cls(**{key: value for key, value in data.items() if key in known})
+    return cls(**_valid_values(cls, data))
+
+
+def _valid_values(cls, data, problems: list[str] | None = None) -> dict:
+    """The keys of `data` that `cls` knows, with values of the right type.
+
+    A hand-edited file can put text where a number belongs (or a number
+    where a whole section belongs); those values fall back to the default
+    instead of failing later, and each is noted in `problems`.
+    """
+    if not isinstance(data, dict):
+        if problems is not None:
+            problems.append(f"[{cls.__name__}] is not a section")
+        return {}
+    values = {}
+    for item in fields(cls):
+        if item.name not in data:
+            continue
+        value = data[item.name]
+        expected = type(item.default)
+        if expected is float and isinstance(value, int) and not isinstance(value, bool):
+            value = float(value)
+        if isinstance(value, expected) and (expected is bool or not isinstance(value, bool)):
+            values[item.name] = value
+        elif problems is not None:
+            problems.append(item.name)
+    return values
 
 
 @dataclass
@@ -110,6 +135,7 @@ THEME_OPTIONS = ("system", "light", "dark")
 # The text colours Dash shipped with before it had a light theme. A settings
 # file still holding exactly these was never customised, so they are read as
 # "follow the theme" rather than forcing light text onto a light window.
+LEGACY_DEFAULT_OPACITY = 0.97
 LEGACY_DEFAULT_TEXT_COLORS = {
     "search_text_color": "#f3f4f7",
     "result_text_color": "#e7e9ee",
@@ -224,23 +250,35 @@ class Settings:
                 settings.load_warnings.append("Your settings file could not be read, so Dash is using the default settings for now.")
             return settings.normalize_resource_paths()
 
+        problems: list[str] = []
         settings = cls(
-            general=_from_section(GeneralSettings, data.get("general", {})),
-            ui=_from_section(UISettings, data.get("ui", {})),
-            search=_from_section(SearchSettings, data.get("search", {})),
-            shortcuts=_from_section(ShortcutSettings, data.get("shortcuts", {})),
-            paths=_from_section(PathSettings, data.get("paths", {})),
+            general=GeneralSettings(**_valid_values(GeneralSettings, data.get("general", {}), problems)),
+            ui=UISettings(**_valid_values(UISettings, data.get("ui", {}), problems)),
+            search=SearchSettings(**_valid_values(SearchSettings, data.get("search", {}), problems)),
+            shortcuts=ShortcutSettings(**_valid_values(ShortcutSettings, data.get("shortcuts", {}), problems)),
+            paths=PathSettings(**_valid_values(PathSettings, data.get("paths", {}), problems)),
         )
+        if problems:
+            log.warning("Settings with the wrong kind of value were reset to defaults: %s", ", ".join(problems))
+            settings.load_warnings.append(
+                "Some settings had values Dash couldn't use, so they are back to their defaults: " + ", ".join(problems) + "."
+            )
         if settings.search.sort_results not in SORT_RESULTS_OPTIONS:
             settings.search.sort_results = SORT_RESULTS_OPTIONS[0]
         if settings.ui.theme not in THEME_OPTIONS:
             settings.ui.theme = THEME_OPTIONS[0]
+        # 0.97 was the old default opacity; it only dimmed the text.
+        if settings.ui.window_opacity == LEGACY_DEFAULT_OPACITY:
+            settings.ui.window_opacity = 1.0
+        settings.ui.window_opacity = min(1.0, max(0.3, settings.ui.window_opacity))
         for key, legacy in LEGACY_DEFAULT_TEXT_COLORS.items():
             if str(getattr(settings.ui, key, "")).strip().lower() == legacy:
                 setattr(settings.ui, key, "")
 
         # Older files had a yes/no "follow the mouse" flag instead of a screen choice.
         general = data.get("general", {})
+        if not isinstance(general, dict):
+            general = {}
         if "launcher_screen" not in general and "show_on_screen_with_mouse" in general:
             settings.general.launcher_screen = "mouse" if general["show_on_screen_with_mouse"] else "primary"
         if not str(settings.general.launcher_screen).strip():

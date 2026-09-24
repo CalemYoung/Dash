@@ -1615,9 +1615,9 @@ class CommandEditorPanel(QFrame):
         groups = self.cmd_manager.groups_containing(name) if name else []
         detail = ""
         if len(groups) == 1:
-            detail = f"It will also be removed from the group: {groups[0]}."
+            detail = f"The group {groups[0]} opens it, and will report it as missing."
         elif groups:
-            detail = f"It will also be removed from the groups: {', '.join(groups)}."
+            detail = f"The groups {', '.join(groups)} open it, and will report it as missing."
         return f"Delete {name}?", detail
 
     def _confirm_delete(self) -> bool:

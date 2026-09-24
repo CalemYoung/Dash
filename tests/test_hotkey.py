@@ -138,7 +138,7 @@ class ListenerTests(unittest.TestCase):
         messages = []
         listener.registrationFailed.connect(messages.append)
         self.app.processEvents()
-        expected = "Alt+Space is already used by another app. Choose a different key in Settings."
+        expected = "Alt+Space is already used by another app, so it may not open Dash reliably. Choose a different key in Settings."
         self.assertEqual(listener.registration_error, expected)
         self.assertEqual(messages, [expected])
         self.assertFalse(listener.uses_system_hotkey)

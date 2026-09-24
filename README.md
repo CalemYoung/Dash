@@ -32,7 +32,7 @@
 - **Add from anywhere:** Copy a file or folder in Explorer and press `Ctrl+V` in Dash, or drop a file, shortcut or link on it, to make it a command. Type something that matches nothing and Dash offers to add it.
 - **Icons you pick:** Every command gets one on its own, and you can swap in a library glyph or your own image, recolor it, or go back to the one Dash found.
 - **Take it with you:** Export commands to a portable file and import them on another PC, icons and all.
-- **Made to fit:** Light, dark or system theme, size, hotkeys, the display Dash opens on, the browser websites use, the web search engine, fonts, colors, the clock and startup behavior are all settings.
+- **Made to fit:** Light, dark or system theme, size, hotkeys, the display Dash opens on, the browser websites use, the web search engine, fonts, colors, the clock and the update check are all settings.
 
 ## Why another launcher?
 
@@ -121,8 +121,9 @@ The hotkey and the three `Ctrl` shortcuts are yours to change under Settings.
 
 ## Beyond opening things
 
-- **Web search.** When nothing matches at all, Dash can offer to search the
-  web for what you typed. Off until you turn it on in Settings.
+- **Nothing matches?** Dash offers to add what you typed as a new command, or
+  to search the web for it. Turn on "Web search unknown commands" in Settings
+  to put the web search first.
 - **Groups carry on.** A target that has been deleted or will not open is
   reported when the group finishes, rather than stopping the ones after it.
 - **Switch instead of relaunch.** If an app's window is already open, Dash
@@ -172,7 +173,7 @@ comes with short aliases you can edit, so `word` finds Microsoft Word and `vsc`
 finds Visual Studio Code. Nothing is added until you choose it, and you can
 run the scan again any time from Settings.
 
-To tidy up later, open Settings and choose "Manage..." under Commands to see,
+To tidy up later, open Settings and choose "Manage Commands..." to see,
 edit or delete every command at once.
 
 Settings opens from the launcher: press `Ctrl+,`, or type "settings". The

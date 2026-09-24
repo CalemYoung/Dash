@@ -161,9 +161,9 @@ class DeleteTests(EditorFixture):
     def test_the_question_names_the_groups_that_lose_it(self):
         question, detail = self.panel("Tool").delete_question()
         self.assertEqual(question, "Delete Tool?")
-        self.assertEqual(detail, "It will also be removed from the groups: Start day, Evening.")
+        self.assertEqual(detail, "The groups Start day, Evening open it, and will report it as missing.")
         question, detail = self.panel("Jira").delete_question()
-        self.assertEqual(detail, "It will also be removed from the group: Start day.")
+        self.assertEqual(detail, "The group Start day opens it, and will report it as missing.")
         self.assertEqual(self.panel("Evening").delete_question(), ("Delete Evening?", ""))
 
     def test_cancel_is_the_default_and_nothing_is_deleted(self):

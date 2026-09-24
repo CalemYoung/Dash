@@ -12,11 +12,18 @@ All notable changes to Dash are listed here. The format follows
 - A choice of web search engine for the "search the web" offer.
 - A "Download website icons" setting, to stop Dash fetching favicons.
 - A list in Settings for managing all of your commands in one place.
-- Actions on a result: run as administrator, open the containing folder,
-  copy the path, and make a new copy of the command.
-- An arguments field for app commands.
-- Drag and drop a file, folder, shortcut or link onto Dash to add it as a
-  command.
+- Actions on a result (right-click, the Menu key or Shift+F10): run as
+  administrator, open the containing folder, copy the path or address, and
+  open a new copy of an app that is already running.
+- Arguments and "Start in" fields for app commands.
+- Drag and drop a file, folder, shortcut or link onto Dash, or paste a file
+  copied in Explorer, to add it as a command.
+- When nothing matches, Dash offers to add the text as a command or to
+  search the web for it.
+- Size presets (Small, Medium, Large) in Settings.
+- "Open Dash", "Settings..." and "Open Log Folder" in the tray menu.
+- Recommended websites use your local Wikipedia and Amazon store.
+- Recently used programs start ticked in the recommended-commands scan.
 - Alias suggestions for programs found by the scan.
 - A log file at `%APPDATA%\Dash\logs\dash.log`, and a message with the
   details when Dash hits an unexpected error instead of closing silently.
@@ -41,8 +48,9 @@ All notable changes to Dash are listed here. The format follows
 
 ### Fixed
 
-- A site search keyword now takes precedence over a command whose name
-  merely starts with the same letters.
+- A command whose name starts with everything you typed now comes before a
+  site search that happens to share its first word, so "google maps" opens
+  Google Maps rather than searching Google for "maps".
 - "Most used first" sorting now orders results by how often you open them.
 - A damaged settings or commands file no longer stops Dash from starting.
 - Settings, commands and usage counts are saved atomically, so a crash or

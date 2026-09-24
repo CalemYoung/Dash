@@ -96,8 +96,9 @@ are not maintained in this repository. It can only update a package that is
 already there.
 
 `packaging\winget\manifests` holds the manifests for the first submission of
-`CalemYoung.Dash`. To submit them: fill in `InstallerSha256` from the
-release's `.sha256` file (in upper case), check them with
+`CalemYoung.Dash`, with `InstallerSha256` already filled in from the
+release's `.sha256` file. To submit them (or a newer version, after updating
+the version and hash to match its release), check them with
 `winget validate --manifest <folder>` and `winget install --manifest
 <folder>`, and open a pull request to winget-pkgs. Once that version is
 merged, later versions are handled by the workflow and the folder can be

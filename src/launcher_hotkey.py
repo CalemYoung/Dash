@@ -330,7 +330,7 @@ class HotkeyListener(QObject):
             if self._register_native(parsed):
                 self.uses_system_hotkey = True
                 return
-            self._set_error(f"{parsed.display()} is already used by another app. Choose a different key in Settings.")
+            self._set_error(f"{parsed.display()} is already used by another app, so it may not open Dash reliably. Choose a different key in Settings.")
         elif parsed is None:
             self._set_error(f"Dash doesn't recognize the hotkey {self.hotkey}. Choose a different key in Settings.")
         self._parse_and_register()

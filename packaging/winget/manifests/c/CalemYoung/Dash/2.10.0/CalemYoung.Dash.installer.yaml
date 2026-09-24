@@ -17,6 +17,6 @@ AppsAndFeaturesEntries:
 Installers:
 - Architecture: x64
   InstallerUrl: https://github.com/CalemYoung/Dash/releases/download/v2.10.0/DashSetup-2.10.0.exe
-  InstallerSha256: <SHA-256 from DashSetup-2.10.0.exe.sha256 on the release, in upper case>
+  InstallerSha256: FDAE4540700B8038C2B404596A71D497D1129884632F443D6804AE72B8E88E80
 ManifestType: installer
 ManifestVersion: 1.6.0

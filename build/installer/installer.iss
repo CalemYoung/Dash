@@ -109,6 +109,12 @@ Name: "{userappdata}\{#MyAppName}"; Flags: uninsneveruninstall
 Name: "{userappdata}\{#MyAppName}\config"; Flags: uninsneveruninstall
 Name: "{userappdata}\{#MyAppName}\assets\icons"; Flags: uninsneveruninstall
 
+[InstallDelete]
+; Earlier versions added Start Menu shortcuts that opened the raw settings
+; and commands files in Notepad. Upgrades remove them; both are edited in Dash.
+Type: files; Name: "{group}\Edit Settings.lnk"
+Type: files; Name: "{group}\Edit Commands.lnk"
+
 [Icons]
 ; Start menu shortcuts
 Name: "{group}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; Comment: "Open Dash, the keyboard launcher"
