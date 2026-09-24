@@ -1,17 +1,21 @@
-"""Load an icon from disk or from the Tabler library, then set its colours."""
+"""Load an icon from disk or from the Tabler library, then set its colors."""
+import logging
 import sys
 import warnings
 from pathlib import Path
 from typing import cast
 
 from PIL.Image import Image as PILImage
-from PyQt6.QtCore import Qt, QSize, QPoint, QPointF, QRectF, QTimer, pyqtSignal
+from PyQt6.QtCore import Qt, QEvent, QSize, QPoint, QPointF, QRectF, QTimer, pyqtSignal
 from PyQt6.QtGui import QPixmap, QIcon, QImage, QPainter, QColor, QLinearGradient, QPen
 from PyQt6.QtWidgets import QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QLineEdit, QListWidget, QListWidgetItem, QStackedWidget
 from PyQt6.QtWidgets import QFrame, QDialog, QDialogButtonBox, QFileDialog, QLabel, QCheckBox, QPushButton
 from PyQt6.QtSvg import QSvgRenderer
 
+from . import theme
 from .window_placement import fit_within_screen
+
+log = logging.getLogger(__name__)
 
 with warnings.catch_warnings():
     warnings.filterwarnings(
@@ -31,7 +35,7 @@ DIALOG_PREVIEW_SIZE = 120
 EXPORT_SIZE = 256
 
 IMAGE_FILTER = "Images (*.svg *.png *.jpg *.jpeg *.webp *.bmp);;All files (*)"
-DEFAULT_SUBTITLE = "Pick an icon, then set its colours"
+DEFAULT_SUBTITLE = "Pick an icon, then set its colors"
 
 # The rocket icon shown by default; the browser always opens with this loaded
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -42,16 +46,13 @@ ROLE_MEMBER = Qt.ItemDataRole.UserRole
 ROLE_NAME = Qt.ItemDataRole.UserRole + 1
 ROLE_RENDERED = Qt.ItemDataRole.UserRole + 2
 
-# Colours for the parts drawn with QPainter, which a stylesheet cannot reach.
-# Everything else is styled in style.qss; keep these few in sync with it.
-SURFACE = "#202228"
-BORDER = "#3a414d"
-MUTED = "#8b929e"
-ACCENT = "#7aa2f7"
-CHECKER_LIGHT = "#2a2e36"
-CHECKER_DARK = "#202228"
+# The parts drawn with QPainter (the transparency checker, the empty-state
+# artwork, option card glyphs) take their colors from the active theme when
+# they are drawn: see theme.color().
 
-DEFAULT_ICON_COLOR = QColor(ACCENT)
+# Colors baked into the icons people make, not UI chrome: they stay the same
+# in every theme, so an icon looks the way it did when it was saved.
+DEFAULT_ICON_COLOR = QColor("#7aa2f7")
 DEFAULT_BG_COLOR = QColor("#282b32")
 
 STYLESHEET_FILE = "style.qss"
@@ -63,7 +64,7 @@ def load_stylesheet(path=None):
     try:
         return path.read_text(encoding="utf-8")
     except OSError:
-        print(f"warning: could not read {path}, running unstyled", file=sys.stderr)
+        log.warning("Could not read %s, running unstyled", path)
         return ""
 
 
@@ -145,8 +146,8 @@ def smooth_scale(pixmap, size):
 
 
 def extract_icon_colors(pixmap):
-    """Detect an icon's foreground colour, optional background colour, and whether
-    it is monochrome. Multi-coloured artwork must not be tinted, it would collapse
+    """Detect an icon's foreground color, optional background color, and whether
+    it is monochrome. Multi-colored artwork must not be tinted, it would collapse
     to a flat silhouette."""
     if pixmap is None or pixmap.isNull():
         return DEFAULT_ICON_COLOR, None, True
@@ -218,8 +219,8 @@ def extract_icon_colors(pixmap):
 
 
 def is_monochrome(samples, mean_color, total_weight, threshold=28):
-    """True when every sampled pixel sits close to the mean colour, i.e. the icon
-    is a single-colour glyph that can safely be re-tinted."""
+    """True when every sampled pixel sits close to the mean color, i.e. the icon
+    is a single-color glyph that can safely be re-tinted."""
     if not samples or total_weight <= 0:
         return True
     spread = sum(
@@ -238,7 +239,7 @@ def strip_background(pixmap, bg_color, threshold=40):
     """Erase a solid baked-in background so only the artwork's own alpha remains.
 
     Without this, re-tinting an icon that was previously flattened with a
-    background colour would recolour the whole opaque square instead of just
+    background color would recolor the whole opaque square instead of just
     the glyph, since tint_pixmap relies on the alpha channel to know what to
     paint.
     """
@@ -265,10 +266,10 @@ def strip_background(pixmap, bg_color, threshold=40):
 
 
 def tint_pixmap(pixmap, color):
-    """Recolour artwork by scaling the chosen colour by each pixel's own
+    """Recolor artwork by scaling the chosen color by each pixel's own
     luminance (relative to the brightest opaque pixel), rather than flat-
     filling the whole silhouette. A genuinely flat glyph still comes out as
-    one solid colour, but shading (like a darker gear on a lighter body)
+    one solid color, but shading (like a darker gear on a lighter body)
     stays visible instead of being erased.
 
     Done with Qt image operations rather than a per-pixel Python loop: at
@@ -295,7 +296,7 @@ def tint_pixmap(pixmap, color):
         if row:
             max_luminance = max(max_luminance, max(row))
 
-    # Map luminance -> scaled colour through a palette, then restore alpha.
+    # Map luminance -> scaled color through a palette, then restore alpha.
     r, g, b = color.red(), color.green(), color.blue()
     table = []
     for level in range(256):
@@ -315,12 +316,13 @@ def tint_pixmap(pixmap, color):
 def checkerboard(size, cell=10):
     """Classic transparency checker, so 'no background' reads as transparent."""
     pixmap = QPixmap(size, size)
-    pixmap.fill(QColor(CHECKER_LIGHT))
+    pixmap.fill(theme.color("checker_light"))
+    dark = theme.color("checker_dark")
     painter = QPainter(pixmap)
     for y in range(0, size, cell):
         for x in range(0, size, cell):
             if (x // cell + y // cell) % 2:
-                painter.fillRect(x, y, cell, cell, QColor(CHECKER_DARK))
+                painter.fillRect(x, y, cell, cell, dark)
     painter.end()
     return pixmap
 
@@ -328,7 +330,7 @@ def checkerboard(size, cell=10):
 def compose(base_pixmap, icon_color, bg_color, size, transparent_checker=True):
     """Tint an icon and place it on a background.
 
-    A None icon_color keeps the artwork's own colours. With no background colour
+    A None icon_color keeps the artwork's own colors. With no background color
     the result is genuinely transparent, unless transparent_checker is set, in
     which case a checker is drawn for display.
     """
@@ -349,7 +351,7 @@ def compose(base_pixmap, icon_color, bg_color, size, transparent_checker=True):
 
 
 def export_png(base_pixmap, icon_color, bg_color, path, size=EXPORT_SIZE):
-    """Write the coloured icon to disk. No UI; call this from any automation."""
+    """Write the colored icon to disk. No UI; call this from any automation."""
     composed = compose(base_pixmap, icon_color, bg_color, size, transparent_checker=False)
     return composed.save(path, "PNG")
 
@@ -359,7 +361,7 @@ def export_png(base_pixmap, icon_color, bg_color, path, size=EXPORT_SIZE):
 # --------------------------------------------------------------------------- #
 #
 # A recipe is what made an icon: a source (a library glyph name, or a source
-# image kept in the icon store) plus the tint and background colours. The
+# image kept in the icon store) plus the tint and background colors. The
 # flattened PNG on the command is only a render cache of it. Recipes let the
 # studio reopen exactly what was chosen, and let exports carry an icon as a
 # few strings instead of pixels.
@@ -439,12 +441,12 @@ def render_recipe(recipe, size=EXPORT_SIZE):
 def placeholder_pixmap(size):
     """Empty-state artwork for when nothing has been loaded yet."""
     pixmap = QPixmap(size, size)
-    pixmap.fill(QColor(SURFACE))
+    pixmap.fill(theme.color("panel_bg"))
     painter = QPainter(pixmap)
     painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-    painter.setPen(QPen(QColor(BORDER), 2, Qt.PenStyle.DashLine))
+    painter.setPen(QPen(theme.color("panel_border"), 2, Qt.PenStyle.DashLine))
     painter.drawRoundedRect(8, 8, size - 16, size - 16, 14, 14)
-    painter.setPen(QColor(MUTED))
+    painter.setPen(theme.color("text_muted"))
     font = painter.font()
     font.setPointSize(11)
     painter.setFont(font)
@@ -460,9 +462,19 @@ def section_label(text):
 
 
 class ClickableLabel(QLabel):
-    """QLabel that reports left clicks."""
+    """QLabel that reports left clicks, and Enter or Space once it is made
+    focusable, so what a click does can be reached from the keyboard."""
 
     clicked = pyqtSignal()
+
+    def keyPressEvent(self, event):
+        if self.focusPolicy() != Qt.FocusPolicy.NoFocus and event.key() in (
+            Qt.Key.Key_Return, Qt.Key.Key_Enter, Qt.Key.Key_Space
+        ):
+            self.clicked.emit()
+            event.accept()
+            return
+        super().keyPressEvent(event)
 
     def mouseReleaseEvent(self, event):
         if event.button() == Qt.MouseButton.LeftButton and self.rect().contains(
@@ -505,11 +517,17 @@ class OptionCard(QFrame):
         self.setObjectName("optionCard")
         self.setCursor(Qt.CursorShape.PointingHandCursor)
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+        self.setAccessibleName(title)
+        self.setAccessibleDescription(description)
 
+        self._glyph_member = glyph_member
+        self._glyph_size = 24 if compact else 36
         glyph = QLabel()
         glyph.setObjectName("optionGlyph")
         glyph.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        glyph.setPixmap(glyph_pixmap(glyph_member, 24 if compact else 36, QColor(MUTED)))
+        self._glyph = glyph
+        self._update_glyph()
+        theme.notifier().changed.connect(self._update_glyph)
 
         title_label = QLabel(title)
         title_label.setObjectName("optionTitle")
@@ -535,6 +553,9 @@ class OptionCard(QFrame):
             layout.addWidget(desc_label)
         layout.addStretch()
 
+    def _update_glyph(self, *_args):
+        self._glyph.setPixmap(glyph_pixmap(self._glyph_member, self._glyph_size, theme.color("text_muted")))
+
     def keyPressEvent(self, event):
         if event.key() in (Qt.Key.Key_Return, Qt.Key.Key_Enter, Qt.Key.Key_Space):
             self.clicked.emit()
@@ -549,7 +570,7 @@ class OptionCard(QFrame):
 
 
 # --------------------------------------------------------------------------- #
-# colour picker
+# color picker
 # --------------------------------------------------------------------------- #
 
 class _SVSquare(QWidget):
@@ -561,6 +582,9 @@ class _SVSquare(QWidget):
         super().__init__(parent)
         self.setFixedSize(200, 200)
         self.setCursor(Qt.CursorShape.CrossCursor)
+        self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+        self.setAccessibleName("Saturation and brightness")
+        self.setAccessibleDescription("Left and Right change saturation, Up and Down change brightness")
         self._hue = 0.0
         self._sat = 0.0
         self._val = 1.0
@@ -600,6 +624,7 @@ class _SVSquare(QWidget):
         painter.drawEllipse(QPoint(x, y), 6, 6)
         painter.setPen(QPen(Qt.GlobalColor.black, 1))
         painter.drawEllipse(QPoint(x, y), 6, 6)
+        self.paintFocus(painter)
 
     def _update_from_pos(self, pos):
         x = min(max(pos.x(), 0), self.width() - 1)
@@ -615,6 +640,28 @@ class _SVSquare(QWidget):
     def mouseMoveEvent(self, event):
         self._update_from_pos(event.position().toPoint())
 
+    def keyPressEvent(self, event):
+        step = 0.1 if event.modifiers() & Qt.KeyboardModifier.ShiftModifier else 0.02
+        moves = {
+            Qt.Key.Key_Left: (-step, 0.0),
+            Qt.Key.Key_Right: (step, 0.0),
+            Qt.Key.Key_Up: (0.0, step),
+            Qt.Key.Key_Down: (0.0, -step),
+        }
+        if event.key() not in moves:
+            super().keyPressEvent(event)
+            return
+        d_sat, d_val = moves[event.key()]
+        self._sat = min(1.0, max(0.0, self._sat + d_sat))
+        self._val = min(1.0, max(0.0, self._val + d_val))
+        self.update()
+        self.svChanged.emit(self._sat, self._val)
+
+    def paintFocus(self, painter):
+        if self.hasFocus():
+            painter.setPen(QPen(theme.color("accent"), 2))
+            painter.drawRect(self.rect().adjusted(1, 1, -1, -1))
+
 
 class _HueBar(QWidget):
     """Vertical hue slider, 0..1."""
@@ -626,6 +673,9 @@ class _HueBar(QWidget):
         self.setFixedWidth(24)
         self.setMinimumHeight(200)
         self.setCursor(Qt.CursorShape.SizeVerCursor)
+        self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+        self.setAccessibleName("Hue")
+        self.setAccessibleDescription("Up and Down change the hue")
         self._hue = 0.0
 
     def setHue(self, hue):
@@ -645,6 +695,9 @@ class _HueBar(QWidget):
         y = int(self._hue * (rect.height() - 1))
         painter.setPen(QPen(Qt.GlobalColor.black, 2))
         painter.drawRect(0, max(0, y - 2), rect.width() - 1, 4)
+        if self.hasFocus():
+            painter.setPen(QPen(theme.color("accent"), 2))
+            painter.drawRect(rect.adjusted(1, 1, -1, -1))
 
     def _update_from_pos(self, pos):
         y = min(max(pos.y(), 0), self.height() - 1)
@@ -658,24 +711,39 @@ class _HueBar(QWidget):
     def mouseMoveEvent(self, event):
         self._update_from_pos(event.position().toPoint())
 
+    def keyPressEvent(self, event):
+        step = 0.05 if event.modifiers() & Qt.KeyboardModifier.ShiftModifier else 1 / 120
+        if event.key() == Qt.Key.Key_Up:
+            self._hue = max(0.0, self._hue - step)
+        elif event.key() == Qt.Key.Key_Down:
+            self._hue = min(1.0, self._hue + step)
+        else:
+            super().keyPressEvent(event)
+            return
+        self.update()
+        self.hueChanged.emit(self._hue)
+
 
 class ColorPickerWidget(QWidget):
-    """Compact SV-square + hue-bar colour picker (native PyQt6, no external deps)."""
+    """Compact SV-square + hue-bar color picker (native PyQt6, no external deps)."""
 
     colorChanged = pyqtSignal(QColor)
 
-    def __init__(self, color=None, parent=None):
+    def __init__(self, color=None, parent=None, name="Color"):
         super().__init__(parent)
+        self.setAccessibleName(name)
         color = color or QColor(255, 0, 0)
         hue, sat, val, _ = color.getHsvF()
         hue = max(hue or 0.0, 0.0)
 
         self._square = _SVSquare()
+        self._square.setAccessibleName(f"{name}: saturation and brightness")
         self._square.setHue(hue)
         self._square.setSV(sat, val)
         self._square.svChanged.connect(self._on_sv_changed)
 
         self._hue_bar = _HueBar()
+        self._hue_bar.setAccessibleName(f"{name}: hue")
         self._hue_bar.setHue(hue)
         self._hue_bar.hueChanged.connect(self._on_hue_changed)
 
@@ -763,8 +831,10 @@ class LibraryPickerDialog(DragToMoveMixin, QDialog):
 
         self.search_box = QLineEdit()
         self.search_box.setPlaceholderText("Search icons...")
+        self.search_box.setAccessibleName("Search icons")
         self.search_box.setClearButtonEnabled(True)
         self.search_box.textChanged.connect(self._filter)
+        self.search_box.installEventFilter(self)
         layout.addWidget(self.search_box)
 
         self.list_widget = QListWidget()
@@ -776,6 +846,9 @@ class LibraryPickerDialog(DragToMoveMixin, QDialog):
         self.list_widget.setSpacing(4)
         self.list_widget.setUniformItemSizes(True)
         self.list_widget.itemDoubleClicked.connect(self._accept_item)
+        self.list_widget.itemActivated.connect(self._accept_item)  # Enter on the current icon
+        self.list_widget.setAccessibleName("Icon library")
+        self.list_widget.setAccessibleDescription("Arrow keys move between icons, Enter picks one")
         layout.addWidget(self.list_widget)
 
         self._rows = []  # (name, variant, QListWidgetItem)
@@ -786,7 +859,9 @@ class LibraryPickerDialog(DragToMoveMixin, QDialog):
         for name, variant, member in entries:
             item = QListWidgetItem(blank_icon, "")
             item.setSizeHint(QSize(CELL_SIZE, CELL_SIZE))
-            item.setToolTip(f"{name} ({variant})")
+            label = f"{name.replace('_', ' ').lower()} ({variant})"
+            item.setToolTip(label)
+            item.setData(Qt.ItemDataRole.AccessibleTextRole, label)
             item.setData(ROLE_NAME, name)
             item.setData(ROLE_MEMBER, member)
             self.list_widget.addItem(item)
@@ -853,6 +928,17 @@ class LibraryPickerDialog(DragToMoveMixin, QDialog):
         if rendered == 0:
             self._render_timer.stop()
 
+    def eventFilter(self, watched, event):
+        # Down from the search box goes into the grid, so the search, the
+        # grid and Enter are one keyboard path.
+        if watched is self.search_box and event.type() == QEvent.Type.KeyPress and event.key() == Qt.Key.Key_Down:
+            for _name, _variant, item in self._rows:
+                if not item.isHidden():
+                    self.list_widget.setCurrentItem(item)
+                    self.list_widget.setFocus()
+                    return True
+        return super().eventFilter(watched, event)
+
     def selection(self):
         """(name, member) of the chosen icon, or None."""
         return self._selection
@@ -885,11 +971,11 @@ class LibraryPickerDialog(DragToMoveMixin, QDialog):
 
 
 # --------------------------------------------------------------------------- #
-# colour dialog
+# color dialog
 # --------------------------------------------------------------------------- #
 
 class IconStyleDialog(DragToMoveMixin, QDialog):
-    """Set the icon colour and background colour for the loaded icon.
+    """Set the icon color and background color for the loaded icon.
 
     Background transparency is a state you leave by touching the background
     picker, rather than a checkbox that greys the picker out.
@@ -902,44 +988,50 @@ class IconStyleDialog(DragToMoveMixin, QDialog):
         self._initial_icon_color = QColor(icon_color) if icon_color is not None else None
         self._initial_bg_color = QColor(bg_color) if bg_color is not None else None
 
-        self.setWindowTitle("Set Icon Colour")
+        self.setWindowTitle("Set Icon Color")
         self.setWindowFlags(FRAMELESS_DIALOG)
 
         outer = QVBoxLayout(self)
         outer.setContentsMargins(18, 16, 18, 16)
         outer.setSpacing(12)
 
-        header = QLabel("Set Icon Colour")
+        header = QLabel("Set Icon Color")
         header.setObjectName("dialogTitle")
         outer.addWidget(header)
 
         content = QHBoxLayout()
         content.setSpacing(24)
 
-        # icon colour column
+        # icon color column
         icon_col = QVBoxLayout()
-        icon_col.addWidget(section_label("ICON COLOUR"))
-        self.icon_picker = ColorPickerWidget(self._initial_icon_color or DEFAULT_ICON_COLOR)
+        icon_label = section_label("ICON COLOR")
+        icon_col.addWidget(icon_label)
+        self.icon_picker = ColorPickerWidget(self._initial_icon_color or DEFAULT_ICON_COLOR, name="Icon color")
         icon_col.addWidget(self.icon_picker)
         self.icon_hex = QLineEdit(self.icon_picker.currentColor().name())
+        self.icon_hex.setAccessibleName("Icon color, as a hex code")
+        icon_label.setBuddy(self.icon_hex)
         icon_col.addWidget(self.icon_hex)
-        self.original_colors = QCheckBox("Keep original colours")
+        self.original_colors = QCheckBox("Keep original colors")
         self.original_colors.setChecked(self._initial_icon_color is None)
-        self.original_colors.setToolTip("Picking an icon colour turns this off automatically")
+        self.original_colors.setToolTip("Picking an icon color turns this off automatically")
         icon_col.addWidget(self.original_colors)
         icon_col.addStretch()
         content.addLayout(icon_col)
 
-        # background colour column
+        # background color column
         bg_col = QVBoxLayout()
-        bg_col.addWidget(section_label("BACKGROUND COLOUR"))
-        self.bg_picker = ColorPickerWidget(self._initial_bg_color or DEFAULT_BG_COLOR)
+        bg_label = section_label("BACKGROUND COLOR")
+        bg_col.addWidget(bg_label)
+        self.bg_picker = ColorPickerWidget(self._initial_bg_color or DEFAULT_BG_COLOR, name="Background color")
         bg_col.addWidget(self.bg_picker)
         self.bg_hex = QLineEdit(self.bg_picker.currentColor().name())
+        self.bg_hex.setAccessibleName("Background color, as a hex code")
+        bg_label.setBuddy(self.bg_hex)
         bg_col.addWidget(self.bg_hex)
         self.transparent = QCheckBox("No background (transparent)")
         self.transparent.setChecked(self._initial_bg_color is None)
-        self.transparent.setToolTip("Picking a background colour turns this off automatically")
+        self.transparent.setToolTip("Picking a background color turns this off automatically")
         bg_col.addWidget(self.transparent)
         bg_col.addStretch()
         content.addLayout(bg_col)
@@ -951,6 +1043,7 @@ class IconStyleDialog(DragToMoveMixin, QDialog):
         self.preview.setFixedSize(DIALOG_PREVIEW_SIZE, DIALOG_PREVIEW_SIZE)
         self.preview.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.preview.setObjectName("dialogPreview")
+        self.preview.setAccessibleName("Preview of the icon with these colors")
         preview_col.addWidget(self.preview)
         preview_col.addStretch()
         content.addLayout(preview_col)
@@ -974,6 +1067,16 @@ class IconStyleDialog(DragToMoveMixin, QDialog):
         self.transparent.toggled.connect(lambda _checked: self._refresh())
         self.original_colors.toggled.connect(lambda _checked: self._refresh())
 
+        # Tab follows the columns: each picker, its hex code, then its switch.
+        order = [
+            self.icon_picker._square, self.icon_picker._hue_bar, self.icon_hex, self.original_colors,
+            self.bg_picker._square, self.bg_picker._hue_bar, self.bg_hex, self.transparent,
+        ]
+        for earlier, later in zip(order, order[1:]):
+            self.setTabOrder(earlier, later)
+
+        # The transparency checker behind the preview follows the theme.
+        theme.notifier().changed.connect(self._refresh)
         self._refresh()
 
     def showEvent(self, event):
@@ -1051,7 +1154,7 @@ class IconStyleDialog(DragToMoveMixin, QDialog):
         self.transparent.blockSignals(False)
         self._refresh()
 
-    def _refresh(self):
+    def _refresh(self, *_args):
         self.preview.setPixmap(
             compose(self._base, self.icon_color(), self.background_color(), DIALOG_PREVIEW_SIZE)
         )
@@ -1129,6 +1232,10 @@ class IconStudio(DragToMoveMixin, QMainWindow):
         self.preview.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.preview.setObjectName("iconPreview")
         self.preview.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.preview.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+        self.preview.setAccessibleName("Icon preview")
+        self.preview.setAccessibleDescription("Press Enter to change the icon's colors")
+        self.preview.setToolTip("Change colors")
         self.preview.clicked.connect(self._edit_colors)
         loaded_layout.addWidget(self.preview, alignment=Qt.AlignmentFlag.AlignHCenter)
 
@@ -1137,7 +1244,7 @@ class IconStudio(DragToMoveMixin, QMainWindow):
         loaded_layout.addWidget(self.source_label, alignment=Qt.AlignmentFlag.AlignHCenter)
         self.source_label.hide()
 
-        self.hint_label = QLabel("Click the preview to change colours")
+        self.hint_label = QLabel("Click the preview to change colors")
         self.hint_label.setObjectName("hintText")
         loaded_layout.addWidget(self.hint_label, alignment=Qt.AlignmentFlag.AlignHCenter)
 
@@ -1192,6 +1299,7 @@ class IconStudio(DragToMoveMixin, QMainWindow):
 
         if not self._load_recipe(initial_recipe):
             self._load_default_icon(initial_path, initial_icon)
+        theme.notifier().changed.connect(self._refresh)
         self._refresh()
 
     # -- recipe --------------------------------------------------------------- #
@@ -1207,11 +1315,11 @@ class IconStudio(DragToMoveMixin, QMainWindow):
         }
 
     def base_pixmap(self):
-        """The untinted, background-stripped artwork the colours apply to."""
+        """The untinted, background-stripped artwork the colors apply to."""
         return self._base
 
     def _load_recipe(self, recipe):
-        """Reopen exactly what a recipe describes, skipping colour inference."""
+        """Reopen exactly what a recipe describes, skipping color inference."""
         base = recipe_base_pixmap(recipe)
         if base is None:
             return False
@@ -1260,14 +1368,14 @@ class IconStudio(DragToMoveMixin, QMainWindow):
     # -- sources ------------------------------------------------------------ #
 
     def _detect_and_set_colors(self, pixmap):
-        """Detect colours and strip any baked-in background, returning the
+        """Detect colors and strip any baked-in background, returning the
         cleaned pixmap so the caller stores artwork, not a flattened square."""
         icon_color, bg_color, monochrome = extract_icon_colors(pixmap)
         self._bg_color = bg_color
         if bg_color is not None:
             pixmap = strip_background(pixmap, bg_color)
         if not monochrome:
-            # Tinting multi-coloured artwork would flatten it to a silhouette
+            # Tinting multi-colored artwork would flatten it to a silhouette
             self._icon_color = None
             return pixmap
         is_black = (
@@ -1310,7 +1418,7 @@ class IconStudio(DragToMoveMixin, QMainWindow):
             return
         name, member = chosen
         # Render fresh at working size. The library grid keeps its own original
-        # renders, so colouring here never touches the library.
+        # renders, so coloring here never touches the library.
         pixmap = render_icon(member, WORK_RENDER_SIZE)
         if pixmap is None:
             self._status(f"Could not render '{name}'")
@@ -1348,7 +1456,7 @@ class IconStudio(DragToMoveMixin, QMainWindow):
             pixmap = self._detect_and_set_colors(pixmap)
             self._set_icon(pixmap, path.name)
 
-    # -- colours ------------------------------------------------------------ #
+    # -- colors ------------------------------------------------------------ #
 
     def _edit_colors(self):
         if self._base is None:
@@ -1364,7 +1472,7 @@ class IconStudio(DragToMoveMixin, QMainWindow):
         self._bg_color = dialog.background_color()
         self._refresh()
 
-        foreground = "original colours" if self._icon_color is None else self._icon_color.name()
+        foreground = "original colors" if self._icon_color is None else self._icon_color.name()
         background = "transparent" if self._bg_color is None else self._bg_color.name()
         self._status(f"Icon set to {foreground} on {background}")
 
@@ -1378,7 +1486,7 @@ class IconStudio(DragToMoveMixin, QMainWindow):
 
     # -- view --------------------------------------------------------------- #
 
-    def _refresh(self):
+    def _refresh(self, *_args):
         if self._base is None:
             return
 
@@ -1392,9 +1500,10 @@ class IconStudio(DragToMoveMixin, QMainWindow):
 def main():
     app = QApplication(sys.argv)
     app.setStyle("Fusion")  # consistent base across platforms for the stylesheet
-    from . import theme
+    from types import SimpleNamespace
 
-    app.setStyleSheet(theme.render_stylesheet(load_stylesheet(), theme.PALETTES[theme.resolve_theme("system")]))
+    # Follows Windows' light or dark mode, like Dash with its theme on System.
+    theme.apply_theme(app, SimpleNamespace(ui=SimpleNamespace(theme="system")), load_stylesheet())
     window = IconStudio(standalone=True)
     window.show()
     sys.exit(app.exec())

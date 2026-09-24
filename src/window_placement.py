@@ -33,7 +33,7 @@ def clamp_size_to_screen(width: int, height: int, area: QRect, margin: int = SCR
 
 
 def move_within_screen(widget, size: QSize | None = None, anchor_center: QPoint | None = None, area: QRect | None = None):
-    """Centre `widget` on `anchor_center`, then pull it fully back on screen.
+    """Center `widget` on `anchor_center`, then pull it fully back on screen.
 
     Pass `size` whenever the widget was just resized. Qt applies a resize
     lazily, so frameGeometry() straight after setFixedSize() still reports the
@@ -51,7 +51,7 @@ def move_within_screen(widget, size: QSize | None = None, anchor_center: QPoint 
 
 
 def position_within_screen(size: QSize, anchor_center: QPoint | None, area: QRect) -> QPoint:
-    """Top-left corner that centres `size` on `anchor_center` and keeps it
+    """Top-left corner that centers `size` on `anchor_center` and keeps it
     fully inside `area`."""
     frame = QRect(QPoint(0, 0), size)
     frame.moveCenter(anchor_center if anchor_center is not None else area.center())

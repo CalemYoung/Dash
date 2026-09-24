@@ -174,7 +174,11 @@ class IconManager:
         if location.casefold().startswith("ms-settings:"):
             return self.settings.paths.settings_command_icons
 
-        # 4. Auto-extract from executable (Windows)
+        # 4. Auto-extract from executable (Windows); a shortcut that knows
+        # the program it runs shows that program's icon.
+        program_icon = self._shortcut_program_icon(command_config)
+        if program_icon:
+            return program_icon
         if location.endswith(".exe") and os.path.exists(location):
             extracted = self._extract_exe_icon(location)
             if extracted:
@@ -367,6 +371,32 @@ class IconManager:
             return None
         return icon_path
 
+    @staticmethod
+    def _shortcut_program(command) -> str | None:
+        """The program a shortcut command really runs, when it is known.
+
+        A Start Menu shortcut with arguments stays the command's location so
+        it launches as Windows would, but its own icon is often a generic
+        arrow-badged one; the program it points at carries the real icon.
+        """
+        location = str(command.get("location", "") or "")
+        process_path = str(command.get("process_path", "") or "").strip()
+        if not process_path or not location.strip().lower().endswith(".lnk"):
+            return None
+        program = os.path.expanduser(process_path)
+        return program if os.path.isfile(program) else None
+
+    def _shortcut_program_icon(self, command):
+        """Extracted icon file of the program behind a shortcut, or None to
+        fall back to the shortcut itself."""
+        program = self._shortcut_program(command)
+        if program is None or not program.lower().endswith(".exe"):
+            return None
+        extracted = self._extract_exe_icon(program)
+        if extracted:
+            log.debug("Icon for shortcut %s taken from %s", command.get("location"), program)
+        return extracted
+
     def resolve_command_icon(self, command):
         """Resolve the best available icon for a command as a QIcon.
 
@@ -410,6 +440,12 @@ class IconManager:
             else:
                 self._queue_favicon_download(location)
             return QIcon(self.settings.paths.url_command_icon)
+
+        program_icon = self._shortcut_program_icon(command)
+        if program_icon:
+            icon = QIcon(program_icon)
+            if not icon.isNull():
+                return icon
 
         if Path(location).suffix.lower() in ICON_SOURCE_EXTENSIONS and os.path.exists(location):
             icon = QIcon(location)

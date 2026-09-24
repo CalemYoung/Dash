@@ -404,6 +404,25 @@ QPushButton#programImportSelectButton:hover {
     border-bottom: 1px solid palette(mid);
 }
 
+/* Keyboard focus in the command editor and icon studio: every control Tab
+   reaches shows where it is. */
+#CommandEditorPanel QPushButton:focus,
+#homePanel QPushButton:focus,
+QDialog#IconStyleDialog QPushButton:focus,
+QDialog#LibraryPickerDialog QPushButton:focus,
+#CommandEditIcon:focus,
+#Alias:focus,
+QLabel#iconPreview:focus {
+    border: 1px solid {{accent}};
+}
+
+#CommandEditorPanel QPushButton:default:focus,
+#homePanel QPushButton:default:focus,
+QDialog#IconStyleDialog QPushButton:default:focus,
+QDialog#LibraryPickerDialog QPushButton:default:focus {
+    border: 1px solid {{accent_text}};
+}
+
 /* ========================================================================= */
 /* Icon editor                                                               */
 /* ========================================================================= */

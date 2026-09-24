@@ -1,9 +1,11 @@
 import bisect
+import logging
 from enum import IntEnum
 from pathlib import Path
 
 from PyQt6.QtWidgets import (
     QComboBox,
+    QMessageBox,
     QFileDialog,
     QFrame,
     QLineEdit,
@@ -16,7 +18,7 @@ from PyQt6.QtWidgets import (
     QCompleter,
 )
 from PyQt6.QtCore import Qt, QPoint, QRect, QSize, QUrl, QTimer, QFileInfo, pyqtSignal
-from PyQt6.QtGui import QIcon, QColor, QPixmap, QDesktopServices, QShortcut
+from PyQt6.QtGui import QIcon, QPixmap, QDesktopServices, QShortcut
 from PyQt6.QtNetwork import QNetworkAccessManager, QNetworkRequest, QNetworkReply
 
 from src.browsers import DEFAULT_BROWSER, fill_query, installed_browsers, is_search_link
@@ -24,6 +26,9 @@ from src.installed_programs import command_name_for_link, command_name_for_targe
 from src.windows_settings import is_settings_location, settings_description
 from src.keys import format_shortcut, key_sequences
 from src.icon_browser import IconStudio, glyph_pixmap, OutlineIcon, recipe_from_command, recipe_to_fields, render_recipe
+from src import theme
+
+log = logging.getLogger(__name__)
 
 
 class CommandType(IntEnum):
@@ -50,6 +55,12 @@ class CommandType(IntEnum):
     def to_stored_type(self) -> str:
         return {CommandType.URL: "url", CommandType.GROUP: "group"}.get(self, "file")
 
+    @property
+    def label(self) -> str:
+        """What the type selector shows. APP covers documents as well as
+        programs, so it says so; the stored value does not change."""
+        return {CommandType.APP: "App or file", CommandType.URL: "URL"}.get(self, self.name.title())
+
 
 def _invalidate_layout_tree(layout):
     """Drop cached size data in `layout` and every layout nested under it,
@@ -69,7 +80,7 @@ def _invalidate_layout_tree(layout):
 
 def _retain_space(widget):
     """Keep a hidden label's row in the layout so showing it later does not
-    push or clip its neighbours inside a fixed-height editor."""
+    push or clip its neighbors inside a fixed-height editor."""
     policy = widget.sizePolicy()
     policy.setRetainSizeWhenHidden(True)
     widget.setSizePolicy(policy)
@@ -140,13 +151,17 @@ class FlowLayout(QLayout):
 
 
 class Alias(QFrame):
-    """One alias chip: its text and a \u00d7 that removes it."""
+    """One alias chip: its text and a \u00d7 that removes it. The chip takes
+    keyboard focus, and Delete or Backspace removes it."""
 
     def __init__(self, text, alias_box, noun="alias"):
         super().__init__()
         self.alias_text = text
         self.alias_box = alias_box
         self.setObjectName("Alias")
+        self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+        self.setAccessibleName(f"{noun.capitalize()} {text}")
+        self.setAccessibleDescription("Press Delete to remove it")
 
         layout = QHBoxLayout(self)
         layout.setContentsMargins(8, 3, 6, 3)
@@ -155,9 +170,17 @@ class Alias(QFrame):
         self.delete_label = QLabel("\u2715")
         self.delete_label.setObjectName("AliasDelete")
         self.delete_label.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.delete_label.setToolTip(f"Remove {noun} '{text}'")
+        self.delete_label.setToolTip(f"Remove {noun} '{text}' (or select it and press Delete)")
+        self.delete_label.setAccessibleName(f"Remove {noun} {text}")
         layout.addWidget(self.text_label)
         layout.addWidget(self.delete_label)
+
+    def keyPressEvent(self, event):
+        if event.key() in (Qt.Key.Key_Delete, Qt.Key.Key_Backspace):
+            self.alias_box.remove_alias(self, keep_focus=True)
+            event.accept()
+            return
+        super().keyPressEvent(event)
 
     def mousePressEvent(self, event):
         # Only the \u00d7 removes the alias; clicking the text should not lose it.
@@ -206,6 +229,7 @@ class AliasBox(QFrame):
 
         self.grid_container = QFrame()
         self.grid_container.setObjectName("AliasGridContainer")
+        self.grid_container.setAccessibleName(f"{noun.capitalize()} list")
         container_layout = QVBoxLayout(self.grid_container)
         container_layout.setContentsMargins(10, 10, 10, 10)
         container_layout.setSpacing(8)
@@ -219,6 +243,8 @@ class AliasBox(QFrame):
         self.enter_box.textEdited.connect(lambda _text: self._clear_error())
         self.enter_box.setPlaceholderText(placeholder)
         self.enter_box.setMinimumWidth(100)
+        self.enter_box.setAccessibleName(f"Add {'an' if noun[0] in 'aeiou' else 'a'} {noun}")
+        self.enter_box.setAccessibleDescription(f"Type {'an' if noun[0] in 'aeiou' else 'a'} {noun} and press Enter")
         self.enter_box.setTextMargins(6, 0, 0, 0)  # line up with the chip text
         container_layout.addWidget(self.enter_box)
 
@@ -257,10 +283,16 @@ class AliasBox(QFrame):
         self._relayout_chips()
         self.aliasesChanged.emit()
 
-    def remove_alias(self, alias: Alias):
+    def remove_alias(self, alias: Alias, keep_focus: bool = False):
+        """Drop a chip. With `keep_focus` (removed from the keyboard) focus
+        moves to the next chip, or the entry box after the last one."""
         if alias not in self.aliases:
             return
+        index = self.aliases.index(alias)
         self.aliases.remove(alias)
+        if keep_focus:
+            following = self.aliases[index] if index < len(self.aliases) else (self.aliases[index - 1] if index else None)
+            (following or self.enter_box).setFocus()
         self.chip_layout.removeWidget(alias)
         alias.deleteLater()
         self._relayout_chips()
@@ -303,9 +335,26 @@ class AliasBox(QFrame):
         for alias in self.aliases:
             self.chip_layout.addWidget(alias)
             alias.show()
+        self.fix_tab_order()
         self.chip_layout.invalidate()
         self.grid_container.updateGeometry()
         self.updateGeometry()
+
+
+    def fix_tab_order(self):
+        """Tab reaches the chips in reading order, then the entry box.
+
+        Chips are created after the rest of the editor, so Qt would put them
+        at the end of the focus chain, behind Save. Chaining them after the
+        entry box and then moving the entry box behind the last chip leaves
+        them where the entry box was, in the order shown."""
+        if not self.aliases:
+            return
+        previous = self.enter_box
+        for alias in self.aliases:
+            QFrame.setTabOrder(previous, alias)
+            previous = alias
+        QFrame.setTabOrder(previous, self.enter_box)
 
 
 class CommandTypeSelector(QFrame):
@@ -314,6 +363,7 @@ class CommandTypeSelector(QFrame):
     def __init__(self, selection: CommandType):
         super().__init__()
         self.setObjectName("typeSelector")
+        self.setAccessibleName("Command type")
 
         layout = QHBoxLayout(self)
         layout.setContentsMargins(4, 4, 4, 4)
@@ -321,9 +371,10 @@ class CommandTypeSelector(QFrame):
 
         self.buttons: dict[CommandType, QPushButton] = {}
         for type in CommandType:
-            button = QPushButton(type.name.title())
+            button = QPushButton(type.label)
             button.setObjectName("typeSegment")
             button.setCheckable(True)
+            button.setAccessibleDescription("Command type")
             button.setCursor(Qt.CursorShape.PointingHandCursor)
             button.clicked.connect(lambda _checked, t=type: self.select(t))
             layout.addWidget(button)
@@ -338,18 +389,23 @@ class CommandTypeSelector(QFrame):
         self.typeChanged.emit(command_type)
 
 
+def _folder_glyph() -> QIcon:
+    """The browse buttons' folder, in the theme's text color."""
+    return QIcon(glyph_pixmap(OutlineIcon.FOLDER, 20, theme.color("text")))
+
+
 class CommandActionEditor(QFrame):
-    # Indicator colours: idle border, checking amber, reachable green, error red
-    _STATUS_COLORS = {
-        "idle": "#353942",
-        "checking": "#d0a215",
-        "ok": "#3fb950",
-        "bad": "#f85149",
-    }
+    # Status dot states, each colored by the theme token "status_<state>":
+    # idle, checking, reachable (ok) and error (bad).
+    STATUS_STATES = ("idle", "checking", "ok", "bad")
 
     # Resolved target icon; a null QIcon means "fall back to the default"
     iconResolved = pyqtSignal(QIcon)
     browserChanged = pyqtSignal()
+    # Arguments or the start folder changed.
+    launchOptionsChanged = pyqtSignal()
+    # A row appeared or went away, so the editor may need another height.
+    layoutChanged = pyqtSignal()
 
     # How long to keep looking for a favicon the background worker is fetching
     FAVICON_WAIT_MS = 30_000
@@ -362,23 +418,30 @@ class CommandActionEditor(QFrame):
         self._network = QNetworkAccessManager(self)
         self._reply = None
         self._icon_provider = QFileIconProvider()
+        self._status_state = "idle"
+        # (location, program) of a shortcut whose real program is known, so
+        # its icon comes from the program while the location is unchanged.
+        self._shortcut_program: tuple[str, str] | None = None
 
-        self.label = QLabel("Select app that will launch")
+        self.label = QLabel("App or file to open")
         self.label.setObjectName("fieldLabel")
 
         self.command_action_edit_box = QLineEdit()
         self.command_action_edit_box.setPlaceholderText("Path to application or file")
         self.command_action_edit_box.textChanged.connect(self._on_text_changed)
+        self.label.setBuddy(self.command_action_edit_box)
 
         self.browse_button = QPushButton()
-        self.browse_button.setIcon(QIcon(glyph_pixmap(OutlineIcon.FOLDER, 20, QColor("#e7e9ee"))))
+        self.browse_button.setIcon(_folder_glyph())
         self.browse_button.setIconSize(QSize(20, 20))
         self.browse_button.clicked.connect(self.clicked)
 
-        # URL mode: a status dot and a way to open the link
+        # A status dot (reachability for URLs, existence for paths) and, for
+        # URLs, a way to open the link
         self.status_dot = QLabel()
         self.status_dot.setObjectName("urlStatus")
         self.status_dot.setFixedSize(12, 12)
+        self.status_dot.setAccessibleName("Target status")
         self.open_button = QPushButton("Open")
         self.open_button.setCursor(Qt.CursorShape.PointingHandCursor)
         self.open_button.clicked.connect(self._open_in_browser)
@@ -395,6 +458,7 @@ class CommandActionEditor(QFrame):
         self.browser_label.setObjectName("fieldLabel")
         self.browser_combo = QComboBox()
         self.browser_combo.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+        self.browser_label.setBuddy(self.browser_combo)
         self.browser_combo.addItem("Use Global Setting", "")
         for browser in installed_browsers():
             self.browser_combo.addItem(browser.name, browser.key)
@@ -417,6 +481,64 @@ class CommandActionEditor(QFrame):
         # Group mode: the commands it opens, instead of a location
         self.targets_box = AliasBox(noun="command", placeholder="Add a command by name, press \u21b5", keep_order=True)
         self.targets_box.setMaximumHeight(250)
+        self.targets_box.grid_container.setAccessibleName("Commands this group opens, in order")
+
+        # App or file mode: what to pass the program, and where it starts.
+        # Both are optional; empty means "as Windows would start it".
+        self.arguments_label = QLabel("Arguments")
+        self.arguments_label.setObjectName("fieldLabel")
+        self.arguments_edit = QLineEdit()
+        self.arguments_edit.setObjectName("CommandArgumentsEdit")
+        self.arguments_edit.setPlaceholderText("--new-window")
+        self.arguments_edit.setAccessibleName("Arguments")
+        self.arguments_edit.setAccessibleDescription("Optional. Passed to the program when it starts.")
+        self.arguments_edit.setToolTip("Optional. Passed to the program when it starts.")
+        self.arguments_edit.textChanged.connect(lambda _text: self.launchOptionsChanged.emit())
+        self.arguments_label.setBuddy(self.arguments_edit)
+
+        self.working_folder_label = QLabel("Start in")
+        self.working_folder_label.setObjectName("fieldLabel")
+        self.working_folder_edit = QLineEdit()
+        self.working_folder_edit.setObjectName("CommandWorkingFolderEdit")
+        self.working_folder_edit.setPlaceholderText("Default")
+        self.working_folder_edit.setAccessibleName("Start in folder")
+        self.working_folder_edit.setAccessibleDescription("Optional. The folder the program starts in; empty uses its own.")
+        self.working_folder_edit.setToolTip("Optional. The folder the program starts in; empty uses its own.")
+        self.working_folder_edit.textChanged.connect(lambda _text: self.launchOptionsChanged.emit())
+        self.working_folder_label.setBuddy(self.working_folder_edit)
+        self.working_folder_button = QPushButton()
+        self.working_folder_button.setIcon(_folder_glyph())
+        self.working_folder_button.setIconSize(QSize(20, 20))
+        self.working_folder_button.setAccessibleName("Choose the folder to start in")
+        self.working_folder_button.setToolTip("Choose the folder to start in")
+        self.working_folder_button.clicked.connect(self._choose_working_folder)
+
+        arguments_column = QVBoxLayout()
+        arguments_column.setContentsMargins(0, 0, 0, 0)
+        arguments_column.setSpacing(2)
+        arguments_column.addWidget(self.arguments_label)
+        # As tall as the start folder row with its button, so the two fields
+        # line up side by side at any font size.
+        arguments_row = QHBoxLayout()
+        arguments_row.addWidget(self.arguments_edit)
+        arguments_row.addStrut(max(self.working_folder_button.sizeHint().height(), self.arguments_edit.sizeHint().height()))
+        arguments_column.addLayout(arguments_row)
+        working_folder_row = QHBoxLayout()
+        working_folder_row.setSpacing(8)
+        working_folder_row.addWidget(self.working_folder_edit, 1)
+        working_folder_row.addWidget(self.working_folder_button)
+        working_folder_column = QVBoxLayout()
+        working_folder_column.setContentsMargins(0, 0, 0, 0)
+        working_folder_column.setSpacing(2)
+        working_folder_column.addWidget(self.working_folder_label)
+        working_folder_column.addLayout(working_folder_row)
+        self.launch_options = QFrame()
+        self.launch_options.setObjectName("launchOptions")
+        launch_layout = QHBoxLayout(self.launch_options)
+        launch_layout.setContentsMargins(0, 8, 0, 0)
+        launch_layout.setSpacing(12)
+        launch_layout.addLayout(arguments_column, 1)
+        launch_layout.addLayout(working_folder_column, 1)
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -424,11 +546,58 @@ class CommandActionEditor(QFrame):
         layout.addWidget(self.label)
         layout.addLayout(row)
         layout.addWidget(self.targets_box)
+        layout.addWidget(self.launch_options)
         layout.addSpacing(6)
         layout.addWidget(self.browser_label)
         layout.addWidget(self.browser_combo)
 
         self.set_mode(CommandType.APP)
+        theme.notifier().changed.connect(self._on_theme_changed)
+
+    def _on_theme_changed(self, *_args):
+        for button in (self.browse_button, self.working_folder_button):
+            button.setIcon(_folder_glyph())
+        self._apply_status_color()
+
+    # ---------------------------------------------------------- launch options
+
+    def launch_options_apply(self) -> bool:
+        """Whether arguments and a start folder mean anything for the current
+        target: a program or file, not a folder, website, group, Store app,
+        Settings page or other Windows link."""
+        if self._mode != CommandType.APP:
+            return False
+        return not is_link_location(self.command_action_edit_box.text().strip())
+
+    def arguments(self) -> str:
+        return self.arguments_edit.text().strip()
+
+    def working_folder(self) -> str:
+        return self.working_folder_edit.text().strip()
+
+    def set_launch_options(self, arguments: str = "", working_folder: str = ""):
+        self.arguments_edit.setText(str(arguments or ""))
+        self.working_folder_edit.setText(str(working_folder or ""))
+
+    def set_shortcut_program(self, location: str, program: str):
+        """The program a shortcut runs, for showing its icon while the
+        location stays the shortcut."""
+        self._shortcut_program = (location.strip(), program.strip()) if location and program else None
+
+    def _update_launch_options_visibility(self):
+        visible = self.launch_options_apply()
+        if visible != self.launch_options.isVisibleTo(self):
+            self.launch_options.setVisible(visible)
+            self.layoutChanged.emit()
+
+    def _choose_working_folder(self):
+        start = self.working_folder()
+        if not start:
+            target = self.command_action_edit_box.text().strip()
+            start = str(Path(target).expanduser().parent) if target else ""
+        path = QFileDialog.getExistingDirectory(self, "Choose the Folder to Start In", start)
+        if path:
+            self.working_folder_edit.setText(str(Path(path)))
 
     def targets(self) -> list[str]:
         return self.targets_box.alias_texts()
@@ -463,24 +632,34 @@ class CommandActionEditor(QFrame):
         self.open_button.setVisible(is_url)
         self.browser_label.setVisible(is_url)
         self.browser_combo.setVisible(is_url)
+        self.launch_options.setVisible(self.launch_options_apply())
 
         if is_group:
             self.label.setText("Commands to open, in order")
+            self.label.setBuddy(self.targets_box.enter_box)
             self._check_timer.stop()
             self._favicon_timer.stop()
             self.iconResolved.emit(QIcon())
             return
+        self.label.setBuddy(self.command_action_edit_box)
         if command_type == CommandType.APP:
-            self.label.setText("Select app that will launch")
+            self.label.setText("App or file to open")
             self.command_action_edit_box.setPlaceholderText("Path to application or file")
+            self.command_action_edit_box.setAccessibleName("App or file to open")
+            self.browse_button.setAccessibleName("Browse for an app or file")
+            self.browse_button.setToolTip("Browse for an app or file")
         elif command_type == CommandType.FOLDER:
-            self.label.setText("Select folder to open")
+            self.label.setText("Folder to open")
             self.command_action_edit_box.setPlaceholderText("Path to folder")
+            self.command_action_edit_box.setAccessibleName("Folder to open")
+            self.browse_button.setAccessibleName("Browse for a folder")
+            self.browse_button.setToolTip("Browse for a folder")
         else:
             # {query} only adds searching: the address opens on its own when
             # nothing is typed after the command, so it reads as the extra it is.
             self.label.setText("Enter URL to open; add {query} to search the site too")
             self.command_action_edit_box.setPlaceholderText("https://example.com  or  https://example.com/search?q={query}")
+            self.command_action_edit_box.setAccessibleName("Website address")
 
         self._on_text_changed(self.command_action_edit_box.text())
 
@@ -528,6 +707,7 @@ class CommandActionEditor(QFrame):
         text = text.strip()
         if self._mode == CommandType.GROUP:
             return  # a group has no location to check
+        self._update_launch_options_visibility()
         if self._mode != CommandType.URL:
             self._check_timer.stop()
             self._favicon_timer.stop()
@@ -586,7 +766,7 @@ class CommandActionEditor(QFrame):
             return
         if is_link_location(text):
             if self._mode == CommandType.FOLDER:
-                self._set_status("bad", "This is a Windows link. Switch the type to App to open it.")
+                self._set_status("bad", "This is a Windows link. Switch the type to App or file to open it.")
             elif is_app_id_location(text):
                 self._set_status("ok", "A Windows app, started by its app id")
             elif text.casefold().startswith("ms-settings:"):
@@ -599,7 +779,7 @@ class CommandActionEditor(QFrame):
             if path.is_dir():
                 self._set_status("ok", "Folder found")
             elif path.is_file():
-                self._set_status("bad", "This is a file. Switch the type to App to launch it.")
+                self._set_status("bad", "This is a file. Switch the type to App or file to open it.")
             else:
                 self._set_status("bad", "Folder not found")
         else:
@@ -611,7 +791,10 @@ class CommandActionEditor(QFrame):
                 self._set_status("bad", "File not found")
 
     def _resolve_file_icon(self, path):
-        """Use the OS icon for the app/file/folder, or fall back to the default."""
+        """Use the OS icon for the app/file/folder, or fall back to the default.
+        A shortcut whose program is known shows the program's icon."""
+        if self._shortcut_program and path == self._shortcut_program[0] and QFileInfo(self._shortcut_program[1]).isFile():
+            path = self._shortcut_program[1]
         if path and QFileInfo(path).exists():
             icon = self._icon_provider.icon(QFileInfo(path))
             self.iconResolved.emit(icon if not icon.isNull() else self._fallback_icon())
@@ -703,9 +886,15 @@ class CommandActionEditor(QFrame):
     def _set_status(self, state, tooltip=""):
         if state == "ok" and self._mode == CommandType.URL and is_search_link(self.command_action_edit_box.text()):
             tooltip += ". A search keyword: type its name, a space and what to search for."
-        color = self._STATUS_COLORS.get(state, self._STATUS_COLORS["idle"])
-        self.status_dot.setStyleSheet(f"background:{color}; border-radius:6px;")
+        self._status_state = state if state in self.STATUS_STATES else "idle"
+        self._apply_status_color()
         self.status_dot.setToolTip(tooltip)
+        self.status_dot.setAccessibleDescription(tooltip)
+
+    def _apply_status_color(self):
+        # Read at paint time, so the dot follows a theme switched while open.
+        color = theme.color_name(f"status_{self._status_state}")
+        self.status_dot.setStyleSheet(f"background:{color}; border-radius:6px;")
 
     def _open_in_browser(self):
         text = self.command_action_edit_box.text().strip()
@@ -767,7 +956,8 @@ def suggested_description(command_type: CommandType, location: str, name: str) -
     return f"Opens {name}"
 
 
-# The icon a group gets when none is chosen: a stack, in Dash's colours.
+# The icon a group gets when none is chosen: a stack, in Dash's colors.
+# Baked into the saved icon, so it is the same in every theme.
 GROUP_ICON_RECIPE = {"glyph": "outline:STACK_2", "source": None, "color": "#f3f4f7", "background": "#4a3f66"}
 
 
@@ -815,7 +1005,7 @@ class CommandEditorPanel(QFrame):
         self._original_name = self._command.get("name") if command and not standalone else None
         self._resolved_icon = QIcon()
         self._icon_path = self._command.get("icon")
-        # What made the icon (library glyph or source image, plus colours), if known.
+        # What made the icon (library glyph or source image, plus colors), if known.
         self._icon_recipe = recipe_from_command(self._command) if command else None
 
         self._initial_name = self._command.get("name", "") if command else ""
@@ -827,6 +1017,8 @@ class CommandEditorPanel(QFrame):
         self._initial_icon = self._command.get("icon") if command else None
         self._initial_browser = (self._command.get("browser") or None) if command else None
         self._initial_targets = [str(target) for target in self._command.get("targets", [])] if command else []
+        self._initial_arguments = str(self._command.get("arguments") or "").strip() if command else ""
+        self._initial_working_folder = str(self._command.get("working_folder") or "").strip() if command else ""
         # What the editor last offered for the name and description from the
         # target. A field still holding its offer follows the next target the
         # user picks; one the user has written in is theirs and is left alone.
@@ -854,12 +1046,16 @@ class CommandEditorPanel(QFrame):
         self._command_icon.setIconSize(QSize(42, 42))
         self._command_icon.setFixedSize(64, 64)
         self._command_icon.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._command_icon.setAccessibleName("Command icon")
+        self._command_icon.setAccessibleDescription("Opens the icon editor")
+        self._command_icon.setToolTip("Change the icon")
         self._command_icon.clicked.connect(self.open_icon_browser)
         self._default_command_icon = default_icon
 
         self.command_name_edit_box = QLineEdit()
         self.command_name_edit_box.setObjectName("CommandNameEditBox")
         self.command_name_edit_box.setPlaceholderText("Command Name")
+        self.command_name_edit_box.setAccessibleName("Command name")
         self.validation_message = QLabel()
         self.validation_message.setObjectName("validationMessage")
         _retain_space(self.validation_message)
@@ -888,6 +1084,7 @@ class CommandEditorPanel(QFrame):
         command_description_column.setSpacing(2)
         command_description_label = QLabel("Description")
         command_description_label.setObjectName("fieldLabel")
+        command_description_label.setBuddy(self.command_description_edit_box)
         command_description_column.addWidget(command_description_label)
         command_description_column.addWidget(self.command_description_edit_box)
 
@@ -895,6 +1092,7 @@ class CommandEditorPanel(QFrame):
         command_type_row_label.setObjectName("fieldLabel")
         start_type = CommandType.from_command(self._command) if command else CommandType.APP
         self.command_type_selector = CommandTypeSelector(start_type)
+        command_type_row_label.setBuddy(self.command_type_selector.buttons[start_type])
         command_type_row = QVBoxLayout()
         command_type_row.setContentsMargins(0, 0, 0, 0)
         command_type_row.setSpacing(2)
@@ -907,6 +1105,7 @@ class CommandEditorPanel(QFrame):
         self.delete_command_btn = QPushButton(self)
         self.delete_command_btn.setObjectName("DeleteCommandObject")
         self.delete_command_btn.setText("Delete command")
+        self.delete_command_btn.setAccessibleDescription("Asks before deleting")
         self.delete_command_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self.delete_command_btn.clicked.connect(self._delete_and_close)
         # Deleting only makes sense for a command that is actually stored.
@@ -953,6 +1152,7 @@ class CommandEditorPanel(QFrame):
         # window holding this panel must be able to re-fit its height.
         self.command_type_selector.typeChanged.connect(lambda _type: self.layoutChanged.emit())
         self.command_action.iconResolved.connect(self._apply_command_icon)
+        self.command_action.layoutChanged.connect(self.layoutChanged)
         self.command_action.set_mode(self.command_type_selector.selection)
         targets_box = self.command_action.targets_box
         targets_box.set_keyword_validator(self._validate_new_target)
@@ -967,6 +1167,7 @@ class CommandEditorPanel(QFrame):
         alias_box_label = QLabel("Aliases")
         alias_box_label.setObjectName("fieldLabel")
         self.alias_box = AliasBox()
+        alias_box_label.setBuddy(self.alias_box.enter_box)
         self.alias_box.set_keyword_validator(self._validate_new_alias)
         self.alias_box.setMaximumHeight(250)
 
@@ -1006,38 +1207,55 @@ class CommandEditorPanel(QFrame):
         self.command_type_selector.typeChanged.connect(self._update_dirty_state)
         self.command_action.command_action_edit_box.textChanged.connect(self._update_dirty_state)
         self.command_action.browserChanged.connect(self._update_dirty_state)
+        self.command_action.launchOptionsChanged.connect(self._update_dirty_state)
+        self.command_action.layoutChanged.connect(self._update_dirty_state)
+        self.command_type_selector.typeChanged.connect(self._update_description_hint)
         self.alias_box.aliasesChanged.connect(self._update_dirty_state)
         self.alias_box.aliasesChanged.connect(self.layoutChanged)
         self.command_action.targets_box.aliasesChanged.connect(self._update_dirty_state)
         self.command_action.targets_box.aliasesChanged.connect(self.layoutChanged)
         self._built = True
         self._update_dirty_state()
+        self._update_description_hint()
 
         # Explicit tab order so focus follows the visual top-to-bottom flow.
-        # Hidden widgets are skipped: Qt warns if they're in the chain.
-        order = [self.command_name_edit_box, self.command_description_edit_box]
+        # Every control is chained, shown or not: Tab skips hidden ones, and
+        # one left out would keep its creation-order place when the type
+        # switch shows it. Alias chips slot in before their entry boxes.
+        action = self.command_action
+        order = [self._command_icon, self.command_name_edit_box, self.command_description_edit_box]
         order += [self.command_type_selector.buttons[t] for t in CommandType]
         order += [
-            self.command_action.command_action_edit_box,
-            self.command_action.browse_button,
-            self.command_action.open_button,
+            action.command_action_edit_box,
+            action.browse_button,
+            action.open_button,
+            action.targets_box.enter_box,
+            action.arguments_edit,
+            action.working_folder_edit,
+            action.working_folder_button,
+            action.browser_combo,
             self.alias_box.enter_box,
             self.delete_command_btn,
+            self.reset_count_btn,
             self.close_button,
             self.cancel_button,
             self.save_button,
         ]
-        order = [w for w in order if w.isVisibleTo(self)]
         for earlier, later in zip(order, order[1:]):
             self.setTabOrder(earlier, later)
+        action.targets_box.fix_tab_order()
+        self.alias_box.fix_tab_order()
 
     def _populate(self, command):
         if not command:
             return
         self.command_name_edit_box.setText(command.get("name", ""))
         self.command_description_edit_box.setText(command.get("description", ""))
+        # Before the location, whose icon it changes.
+        self.command_action.set_shortcut_program(str(command.get("location", "") or ""), str(command.get("process_path", "") or ""))
         self.command_action.command_action_edit_box.setText(command.get("location", ""))
         self.command_action.set_browser(command.get("browser"))
+        self.command_action.set_launch_options(command.get("arguments", ""), command.get("working_folder", ""))
         self.command_action.set_targets(command.get("targets", []))
         self.alias_box.set_aliases(command.get("aliases", []))
         # Setting the location above resolved the target's own icon, which
@@ -1079,6 +1297,69 @@ class CommandEditorPanel(QFrame):
             self._auto_description = description
             self.command_description_edit_box.setText(description)
 
+    def prefill(self, name: str | None = None, target: str | None = None) -> None:
+        """Fill in a new command as though the person had typed it.
+
+        `target` is a file, program, shortcut (.lnk), folder or web address,
+        from typed text or a drop (a file:// URL is accepted too). The type
+        follows it: a web address is a URL command, an existing folder a
+        Folder command, anything else App or file. The name and description
+        are then suggested from it, as when a target is picked by hand.
+
+        `name`, when given, wins over the suggestion and is kept if the
+        target changes later, since the person chose it.
+
+        The fields change through their normal signals, so the editor is
+        dirty afterwards (Save and Cancel show) and the name is checked for
+        clashes at once. Focus is left where it is.
+        """
+        target = self._normalized_target(target)
+        if target:
+            command_type = self._type_for_target(target)
+            if command_type != self.command_type_selector.selection:
+                self.command_type_selector.select(command_type)
+            self.command_action.command_action_edit_box.setText(target)
+        name = str(name or "").strip()
+        if name:
+            self.command_name_edit_box.setText(name)
+            self._validate_name()
+        self._update_dirty_state()
+        self.layoutChanged.emit()
+
+    @staticmethod
+    def _normalized_target(target: str | None) -> str:
+        """A dropped or typed target as the location field wants it: no
+        surrounding quotes or blanks, local files rather than file:// URLs,
+        and https:// in front of a bare www. address."""
+        text = str(target or "").strip().strip('"').strip()
+        if not text:
+            return ""
+        if text.casefold().startswith("file:"):
+            local = QUrl(text).toLocalFile()
+            return str(Path(local)) if local else text
+        if text.casefold().startswith("www."):
+            return "https://" + text
+        return text
+
+    @staticmethod
+    def _type_for_target(target: str) -> CommandType:
+        if target.casefold().startswith(("http://", "https://")):
+            return CommandType.URL
+        if is_link_location(target):
+            return CommandType.APP
+        path = Path(target).expanduser()
+        if path.is_dir():
+            return CommandType.FOLDER
+        return CommandType.APP
+
+    def _update_description_hint(self, *_args):
+        """A group with no description of its own shows what it opens, the
+        summary the launcher uses in its place, as the field's hint."""
+        hint = "Description"
+        if self._original_name and self.command_type_selector.selection == CommandType.GROUP:
+            hint = self.cmd_manager.group_summary(self._original_name) or hint
+        self.command_description_edit_box.setPlaceholderText(hint)
+
     def _is_dirty(self) -> bool:
         if (
             not hasattr(self, "command_name_edit_box")
@@ -1104,7 +1385,16 @@ class CommandEditorPanel(QFrame):
             or self._icon_recipe != self._initial_recipe
             or self.command_action.browser() != self._initial_browser
             or (current_type == CommandType.GROUP and self.command_action.targets() != self._initial_targets)
+            or self._launch_options_dirty()
         )
+
+    def _launch_options_dirty(self) -> bool:
+        """Arguments and start folder count only while they apply: fields
+        hidden by a type or target that ignores them do not make a change."""
+        action = self.command_action
+        if not action.launch_options_apply():
+            return False
+        return action.arguments() != self._initial_arguments or action.working_folder() != self._initial_working_folder
 
     def _update_dirty_state(self):
         # Icon and text signals fire during construction, before every widget
@@ -1177,7 +1467,28 @@ class CommandEditorPanel(QFrame):
             "command_type": command_type.name.lower(),
             "browser": self.command_action.browser() if command_type == CommandType.URL else None,
             **recipe_to_fields(self._icon_recipe),
+            **self._collect_launch_options(),
         }
+
+    def _collect_launch_options(self) -> dict:
+        """Arguments, start folder and the shortcut's program, for save_command.
+
+        A key that is present replaces the stored value (empty clears it);
+        a key left out keeps the stored value while the location is
+        unchanged. So the fields are sent while they apply, and left out when
+        hidden, which neither clears nor invents a value the person cannot see.
+        The shortcut's program is never shown; it is kept while the location is.
+        """
+        action = self.command_action
+        options = {}
+        if action.launch_options_apply():
+            options["arguments"] = action.arguments()
+            options["working_folder"] = action.working_folder()
+        location = action.command_action_edit_box.text().strip()
+        process_path = str(self._command.get("process_path") or "").strip()
+        if process_path and location == str(self._command.get("location") or "").strip():
+            options["process_path"] = process_path
+        return options
 
     def _save_and_close(self):
         # An alias typed but not yet confirmed with Enter is meant to be kept:
@@ -1210,7 +1521,14 @@ class CommandEditorPanel(QFrame):
             if self._standalone:
                 self.saved.emit(entry)
             else:
-                self.cmd_manager.save_command(entry, original_name=self._original_name)
+                try:
+                    self.cmd_manager.save_command(entry, original_name=self._original_name)
+                except (OSError, ValueError) as error:
+                    # CommandsFileUnreadableError is an OSError: the file
+                    # could not be read, so Dash will not write over it.
+                    log.warning("Could not save command %r: %s", entry["name"], error)
+                    self._show_problem(f"Could not save: {error}")
+                    return
         self.closed.emit()
 
     def _validate_new_alias(self, alias: str) -> str | None:
@@ -1257,10 +1575,18 @@ class CommandEditorPanel(QFrame):
         self.validation_message.setText(error or "")
         self.validation_message.setVisible(bool(error))
 
+    def _show_problem(self, message):
+        """Say what went wrong under the name, plainly, and stay open."""
+        self.validation_message.setText(message)
+        self.validation_message.show()
+        self.layoutChanged.emit()
+
     def _show_validation_error(self, message):
         self.validation_message.setText(message)
         self.validation_message.show()
-        if "already used" in message or "name" in message.lower():
+        if "working folder" in message and self.command_action.launch_options_apply():
+            self.command_action.working_folder_edit.setFocus()
+        elif "already used" in message or "name" in message.lower():
             self.command_name_edit_box.setFocus()
         elif self.command_type_selector.selection == CommandType.GROUP:
             self.command_action.targets_box.enter_box.setFocus()
@@ -1283,10 +1609,49 @@ class CommandEditorPanel(QFrame):
         self._command["times_executed"] = 0
         self._refresh_reset_button()
 
+    def delete_question(self) -> tuple[str, str]:
+        """The question Delete asks, and the groups it affects, if any."""
+        name = self._original_name or self.command_name_edit_box.text().strip()
+        groups = self.cmd_manager.groups_containing(name) if name else []
+        detail = ""
+        if len(groups) == 1:
+            detail = f"It will also be removed from the group: {groups[0]}."
+        elif groups:
+            detail = f"It will also be removed from the groups: {', '.join(groups)}."
+        return f"Delete {name}?", detail
+
+    def _confirm_delete(self) -> bool:
+        question, detail = self.delete_question()
+        box = QMessageBox(self)
+        box.setWindowTitle("Delete Command")
+        box.setIcon(QMessageBox.Icon.Warning)
+        box.setText(question)
+        if detail:
+            box.setInformativeText(detail)
+        delete_button = box.addButton("Delete", QMessageBox.ButtonRole.DestructiveRole)
+        cancel_button = box.addButton(QMessageBox.StandardButton.Cancel)
+        # Enter must not delete: Cancel is the default, and Esc cancels too.
+        box.setDefaultButton(cancel_button)
+        box.setEscapeButton(cancel_button)
+        self._delete_box = box
+        try:
+            box.exec()
+            return box.clickedButton() is delete_button
+        finally:
+            self._delete_box = None
+
     def _delete_and_close(self):
-        self.icon_manager.delete_command_icon(self._command.get("icon"))
-        if self._original_name:
+        if not self._original_name or not self._confirm_delete():
+            return
+        try:
             self.cmd_manager.delete_command(self._original_name)
+        except OSError as error:
+            log.warning("Could not delete command %r: %s", self._original_name, error)
+            self._show_problem(f"Could not delete: {error}")
+            return
+        # The icon goes only once the command is gone, so a failed delete
+        # leaves the command with its icon.
+        self.icon_manager.delete_command_icon(self._command.get("icon"))
         self.closed.emit()
 
     def open_icon_browser(self):
