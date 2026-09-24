@@ -255,7 +255,7 @@ def _bookmark_entry(title, url, folders: list[str], browser: str) -> dict | None
         "name": name[:80],
         "aliases": [],
         "location": url,
-        "description": f"{browser} favourite ({where})",
+        "description": f"{browser} favorite ({where})",
         "type": "url",
         "group": "bookmarks",
     }
