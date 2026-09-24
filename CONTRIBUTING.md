@@ -103,7 +103,3 @@ the version and hash to match its release), check them with
 <folder>`, and open a pull request to winget-pkgs. Once that version is
 merged, later versions are handled by the workflow and the folder can be
 deleted.
-
-## Reporting security problems
-
-Please do not open a public issue. See [SECURITY.md](SECURITY.md).

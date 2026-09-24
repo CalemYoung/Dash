@@ -1,8 +1,5 @@
 blank_issues_enabled: true
 contact_links:
-  - name: Report a security vulnerability
-    url: https://github.com/CalemYoung/Dash/security/advisories/new
-    about: Please report security problems privately, as described in SECURITY.md.
   - name: Download the latest release
     url: https://github.com/CalemYoung/Dash/releases/latest
     about: Check that the problem still happens in the latest version.

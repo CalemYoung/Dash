@@ -212,8 +212,7 @@ the tray menu takes you there. Please attach it when you
 settings or commands file is damaged, Dash starts anyway, keeps the damaged
 file beside the original with `.bad` on the end, and tells you.
 
-Security issues: see [SECURITY.md](SECURITY.md). What changed in each
-release: see [CHANGELOG.md](CHANGELOG.md).
+What changed in each release: see [CHANGELOG.md](CHANGELOG.md).
 
 ## Development
 

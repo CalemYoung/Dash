@@ -5,7 +5,7 @@ body:
   - type: markdown
     attributes:
       value: |
-        Thanks for taking the time to report this. For a security problem, please do not use this form: see the security policy instead.
+        Thanks for taking the time to report this.
   - type: input
     id: dash-version
     attributes:
