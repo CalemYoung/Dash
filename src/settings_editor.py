@@ -1,4 +1,6 @@
+import logging
 import os
+import time
 from dataclasses import asdict
 from datetime import datetime
 from pathlib import Path
@@ -22,6 +24,7 @@ from PyQt6.QtWidgets import (
     QLabel,
     QLineEdit,
     QListWidget,
+    QMessageBox,
     QTabWidget,
     QToolButton,
     QListWidgetItem,
@@ -32,6 +35,130 @@ from PyQt6.QtWidgets import (
     QVBoxLayout,
     QWidget,
 )
+
+from . import theme
+
+log = logging.getLogger(__name__)
+
+try:  # Added alongside the hotkey clash list; Settings works without it.
+    from .launcher_hotkey import hotkey_conflict_warning as _hotkey_conflict_warning
+except ImportError:
+    _hotkey_conflict_warning = None
+
+
+def hotkey_warning(hotkey: str) -> str | None:
+    """Why a hotkey may not reach Dash, or None when there is nothing to say."""
+    if _hotkey_conflict_warning is None or not str(hotkey or "").strip():
+        return None
+    try:
+        return _hotkey_conflict_warning(str(hotkey))
+    except Exception:
+        log.exception("Could not check hotkey %r for clashes", hotkey)
+        return None
+
+
+# --------------------------------------------------------------- web search --
+
+WEB_SEARCH_CUSTOM = "custom"
+# (key, label, address). The address is what general.web_search stores.
+WEB_SEARCH_PRESETS = (
+    ("google", "Google", "https://www.google.com/search?q={query}"),
+    ("bing", "Bing", "https://www.bing.com/search?q={query}"),
+    ("duckduckgo", "DuckDuckGo", "https://duckduckgo.com/?q={query}"),
+    ("ecosia", "Ecosia", "https://www.ecosia.org/search?q={query}"),
+    ("brave", "Brave", "https://search.brave.com/search?q={query}"),
+)
+
+
+def _normalized_search_url(url: str) -> str:
+    text = str(url or "").strip().casefold()
+    for prefix in ("https://", "http://"):
+        if text.startswith(prefix):
+            text = text[len(prefix):]
+            break
+    if text.startswith("www."):
+        text = text[4:]
+    return text
+
+
+def web_search_preset(url: str) -> str:
+    """The preset key a stored address belongs to, or "custom".
+
+    Addresses are compared without their scheme, "www." or capitalization,
+    so a hand-edited "http://google.com/search?q={query}" is still Google.
+    """
+    wanted = _normalized_search_url(url)
+    for key, _label, address in WEB_SEARCH_PRESETS:
+        if wanted == _normalized_search_url(address):
+            return key
+    return WEB_SEARCH_CUSTOM
+
+
+def web_search_url_for(preset: str) -> str | None:
+    for key, _label, address in WEB_SEARCH_PRESETS:
+        if key == preset:
+            return address
+    return None
+
+
+def web_search_problem(url: str) -> str | None:
+    """What is wrong with a custom search address, or None when it will work."""
+    text = str(url or "").strip()
+    if not text:
+        return "Enter the address to search, with {query} where the search text goes."
+    if not text.lower().startswith(("http://", "https://")):
+        return "The address must start with http:// or https://."
+    if "{query}" not in text:
+        return "The address must contain {query} where the search text goes."
+    return None
+
+
+# -------------------------------------------------------------- size presets --
+
+SIZE_KEYS = ("program_width", "search_height", "results_height", "search_font_size", "result_font_size", "description_font_size")
+SIZE_CUSTOM = "custom"
+# Medium is what Dash ships with. Results heights hold five whole rows at each
+# size; the launcher snaps the list to whole rows either way.
+SIZE_PRESETS: dict[str, dict[str, int]] = {
+    "small": {
+        "program_width": 520,
+        "search_height": 58,
+        "results_height": 248,
+        "search_font_size": 20,
+        "result_font_size": 12,
+        "description_font_size": 9,
+    },
+    "medium": {
+        "program_width": 600,
+        "search_height": 70,
+        "results_height": 288,
+        "search_font_size": 24,
+        "result_font_size": 14,
+        "description_font_size": 10,
+    },
+    "large": {
+        "program_width": 720,
+        "search_height": 84,
+        "results_height": 348,
+        "search_font_size": 28,
+        "result_font_size": 16,
+        "description_font_size": 12,
+    },
+}
+SIZE_LABELS = (("small", "Small"), ("medium", "Medium"), ("large", "Large"), (SIZE_CUSTOM, "Custom"))
+
+
+def size_preset(values) -> str:
+    """The preset whose sizes all match, or "custom". ``values`` is a UISettings
+    or a dict with the SIZE_KEYS."""
+    current = {key: int(values[key] if isinstance(values, dict) else getattr(values, key)) for key in SIZE_KEYS}
+    for name, preset in SIZE_PRESETS.items():
+        if preset == current:
+            return name
+    return SIZE_CUSTOM
+
+
+THEME_LABELS = (("system", "System"), ("light", "Light"), ("dark", "Dark"))
 
 
 class ScrollEdgeFade(QWidget):
@@ -48,17 +175,28 @@ class ScrollEdgeFade(QWidget):
     FADE_HEIGHT = 30
     MAX_ALPHA = 245
 
-    def __init__(self, scroll_area: QScrollArea, color: str = "#202228"):
+    def __init__(self, scroll_area: QScrollArea, color: str | None = None, token: str = "panel_bg"):
         super().__init__(scroll_area.viewport())
         self._scroll_area = scroll_area
-        self._color = QColor(color)
+        # A fixed color stays fixed; otherwise the fade matches the theme's
+        # panel and follows it when the theme changes.
+        self._fixed_color = QColor(color) if color else None
+        self._token = token
         self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+        theme.notifier().changed.connect(self._on_theme_changed)
 
         scroll_area.viewport().installEventFilter(self)
         scroll_bar = scroll_area.verticalScrollBar()
         scroll_bar.valueChanged.connect(self.update)
         scroll_bar.rangeChanged.connect(lambda *_: self.update())
         self._match_viewport()
+
+    @property
+    def _color(self) -> QColor:
+        return QColor(self._fixed_color) if self._fixed_color is not None else theme.color(self._token)
+
+    def _on_theme_changed(self, _name=None):
+        self.update()
 
     def eventFilter(self, watched, event):
         if event.type() == QEvent.Type.Resize:
@@ -183,12 +321,13 @@ class ColorButton(QPushButton):
     def __init__(self, value, parent=None):
         super().__init__(parent)
         # An empty value means "follow the theme"; it stays empty until a
-        # colour is actually picked, so opening Settings changes nothing.
+        # color is actually picked, so opening Settings changes nothing.
         color = QColor(str(value)) if str(value).strip() else QColor()
         self._color = color if color.isValid() else None
         self.setCursor(Qt.CursorShape.PointingHandCursor)
         self.setMinimumWidth(84)
         self.clicked.connect(self._choose_color)
+        theme.notifier().changed.connect(self._update_swatch)
         self._update_swatch()
 
     def color(self) -> str:
@@ -202,17 +341,21 @@ class ColorButton(QPushButton):
         self._update_swatch()
         self.colorChanged.emit(self.color())
 
-    def _update_swatch(self):
+    def _update_swatch(self, _theme_name=None):
         color = self.color()
+        border = theme.color_name("swatch_border")
         if not color:
             self.setText("Theme")
-            self.setStyleSheet("border: 1px solid #596170; border-radius: 6px; padding: 6px 10px;")
+            self.setToolTip("Follows the theme. Click to choose a color.")
+            self.setStyleSheet(f"border: 1px solid {border}; border-radius: 6px; padding: 6px 10px;")
             return
-        text_color = "#111318" if self._color.lightness() > 150 else "#ffffff"
+        # Whichever of near-black and white reads better on the swatch.
+        text_color = "#111318" if theme.contrast_ratio(self._color, QColor("#111318")) >= theme.contrast_ratio(self._color, QColor("#ffffff")) else "#ffffff"
         self.setText(color.upper())
+        self.setToolTip("Click to choose a different color")
         self.setStyleSheet(
             f"background-color: {color}; color: {text_color}; "
-            "border: 1px solid #596170; border-radius: 6px; padding: 6px 10px;"
+            f"border: 1px solid {border}; border-radius: 6px; padding: 6px 10px;"
         )
 
 
@@ -234,14 +377,20 @@ class XCheckBox(QCheckBox):
         size = 18
         rect = self.rect()
         box = rect.adjusted(1, (rect.height() - size) // 2, -(rect.width() - size - 1), -((rect.height() - size) // 2))
-        border = QColor("#8b929e") if self.isEnabled() else QColor("#555b65")
-        fill = QColor("#2d7dff") if self.isChecked() else QColor("#202228")
+        border = theme.color("check_border" if self.isEnabled() else "check_border_disabled")
+        fill = theme.color("accent_strong" if self.isChecked() else "panel_bg")
         painter.setPen(QPen(border, 1.5))
         painter.setBrush(fill)
         painter.drawRoundedRect(box, 4, 4)
 
+        if self.hasFocus():
+            # The box is painted by hand, so the focus ring has to be too.
+            painter.setPen(QPen(theme.color("accent"), 1.5))
+            painter.setBrush(Qt.BrushStyle.NoBrush)
+            painter.drawRoundedRect(box.adjusted(-2, -2, 2, 2), 5, 5)
+
         if self.isChecked():
-            painter.setPen(QPen(QColor("#ffffff"), 2.2, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap))
+            painter.setPen(QPen(theme.color("accent_strong_text"), 2.2, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap))
             inset = 5
             painter.drawLine(box.left() + inset, box.top() + inset, box.right() - inset, box.bottom() - inset)
             painter.drawLine(box.right() - inset, box.top() + inset, box.left() + inset, box.bottom() - inset)
@@ -383,7 +532,12 @@ class SettingsEditorPanel(QFrame):
     importProgramsRequested = pyqtSignal()
     exportCommandsRequested = pyqtSignal()
     importCommandsRequested = pyqtSignal()
+    manageCommandsRequested = pyqtSignal()
     resetRunCountsRequested = pyqtSignal()
+    # Emitted after Save with the new theme's name ("light", "dark" or
+    # "high-contrast") when the theme setting changed; the style sheet has
+    # already been re-applied by then.
+    themeChanged = pyqtSignal(str)
 
     def __init__(self, settings, settings_path: Path, parent=None):
         super().__init__(parent)
@@ -461,6 +615,9 @@ class SettingsEditorPanel(QFrame):
         cancel_shortcut.activated.connect(self._cancel)
 
         self._connect_signals()
+        self._update_hotkey_warning()
+        self._update_web_search_rows()
+        self._update_size_rows()
         self._update_dirty_state()
 
     def _group(self, title, rows):
@@ -469,7 +626,11 @@ class SettingsEditorPanel(QFrame):
         Each row is (label, key, control) or (label, [(key, control), ...]) for
         several controls side by side. Fields all stretch to the same right
         edge and never wrap under their label, so rows line up whatever mix
-        of spin boxes, drop-downs and colour buttons a group holds.
+        of spin boxes, drop-downs and color buttons a group holds.
+
+        Every label is its field's buddy, and every control gets an
+        accessible name (its label, unless it already has one), so a screen
+        reader announces what each field is for.
         """
         group = QGroupBox(title)
         form = QFormLayout(group)
@@ -483,7 +644,10 @@ class SettingsEditorPanel(QFrame):
             if len(row) == 3:
                 label, key, control = row
                 self._controls[key] = control
-                form.addRow(label, self._stretchy(control))
+                self._name_for_accessibility(control, label)
+                label_widget = QLabel(label)
+                label_widget.setBuddy(control)
+                form.addRow(label_widget, self._stretchy(control))
             else:
                 label, pairs = row
                 holder = QWidget()
@@ -492,9 +656,17 @@ class SettingsEditorPanel(QFrame):
                 strip.setSpacing(8)
                 for key, control in pairs:
                     self._controls[key] = control
+                    self._name_for_accessibility(control, label)
                     strip.addWidget(self._stretchy(control), 1)
-                form.addRow(label, holder)
+                label_widget = QLabel(label)
+                label_widget.setBuddy(pairs[0][1])
+                form.addRow(label_widget, holder)
         return group
+
+    @staticmethod
+    def _name_for_accessibility(control, label: str):
+        if not control.accessibleName():
+            control.setAccessibleName(label)
 
     @staticmethod
     def _stretchy(control):
@@ -526,14 +698,27 @@ class SettingsEditorPanel(QFrame):
         return control
 
     @staticmethod
-    def _check(value):
+    def _check(value, tooltip: str = ""):
         control = XCheckBox()
         control.setChecked(value is True or str(value).lower() == "true")
+        if tooltip:
+            control.setToolTip(tooltip)
         return control
 
     @staticmethod
-    def _color(value):
-        return ColorButton(value)
+    def _color(value, accessible_name: str = ""):
+        control = ColorButton(value)
+        if accessible_name:
+            control.setAccessibleName(accessible_name)
+        return control
+
+    @staticmethod
+    def _note():
+        """A small line of text under a field: a warning or a validation message."""
+        label = QLabel()
+        label.setObjectName("validationMessage")
+        label.setWordWrap(True)
+        return label
 
     def _screen_options(self):
         """Choices for where the launcher opens: mouse, primary, then each display.
@@ -571,7 +756,20 @@ class SettingsEditorPanel(QFrame):
 
     def _general_group(self):
         general = self._settings.general
-        return self._group(
+        preset = web_search_preset(general.web_search)
+        web_search_choice = self._choice(
+            preset,
+            [(key, label) for key, label, _address in WEB_SEARCH_PRESETS] + [(WEB_SEARCH_CUSTOM, "Custom...")],
+        )
+        web_search_choice.setToolTip("Where \"Search the web\" sends what you typed")
+        self._web_search_custom = self._line_edit(general.web_search if preset == WEB_SEARCH_CUSTOM else "")
+        self._web_search_custom.setPlaceholderText("https://example.com/search?q={query}")
+        self._web_search_custom.setToolTip("Put {query} where the search text goes")
+        self._web_search_custom.setAccessibleName("Custom web search address")
+        self._web_search_problem = self._note()
+        self._hotkey_warning = self._note()
+
+        group = self._group(
             "General",
             [
                 ("Open Dash with", "general.hotkey", self._hotkey_edit(general.hotkey)),
@@ -579,10 +777,31 @@ class SettingsEditorPanel(QFrame):
                 ("Websites open in", "general.browser", self._choice(general.browser, browser_options(general.browser))),
                 ("Check updates at startup", "general.check_updates_on_startup", self._check(general.check_updates_on_startup)),
                 ("Switch to apps already open", "general.switch_to_open_apps", self._check(general.switch_to_open_apps)),
+                (
+                    "Hide when clicking elsewhere",
+                    "general.hide_when_focus_lost",
+                    self._check(general.hide_when_focus_lost, "Close the launcher when you click another window, like the Start menu does"),
+                ),
+                (
+                    "Download website icons",
+                    "general.download_favicons",
+                    self._check(
+                        general.download_favicons,
+                        "Fetch each website command's icon from the site, or from Google's or DuckDuckGo's icon "
+                        "service when the site has none. Those services then see which sites you have commands for. "
+                        "Turn off to make no requests for icons; website commands use the default website icon.",
+                    ),
+                ),
                 ("Web search unknown commands", "general.web_search_enabled", self._check(general.web_search_enabled)),
-                ("Search the web with", "general.web_search", self._line_edit(general.web_search)),
+                ("Search the web with", "general.web_search", web_search_choice),
             ],
         )
+        form = cast(QFormLayout, group.layout())
+        # The clash warning sits right under the hotkey it is about.
+        form.insertRow(1, "", self._hotkey_warning)
+        form.addRow("Search address", self._stretchy(self._web_search_custom))
+        form.addRow("", self._web_search_problem)
+        return group
 
     def _search_group(self):
         search = self._settings.search
@@ -590,7 +809,12 @@ class SettingsEditorPanel(QFrame):
             "Search",
             [
                 ("Autocomplete", "search.autocomplete", self._check(search.autocomplete)),
-                ("Ignore capitalisation", "search.ignore_case", self._check(search.ignore_case)),
+                ("Ignore capitalization", "search.ignore_case", self._check(search.ignore_case)),
+                (
+                    "Match the start of any word",
+                    "search.match_word_starts",
+                    self._check(search.match_word_starts, "\"code\" finds Visual Studio Code"),
+                ),
                 (
                     "Sort results by",
                     "search.sort_results",
@@ -604,9 +828,10 @@ class SettingsEditorPanel(QFrame):
         clear_history_button = QPushButton("Clear...")
         clear_history_button.setCursor(Qt.CursorShape.PointingHandCursor)
         clear_history_button.setToolTip("Forget how often each command has been opened, so \"most used first\" starts over")
+        clear_history_button.setAccessibleName("Clear usage history")
         clear_history_button.clicked.connect(self.resetRunCountsRequested.emit)
         form = cast(QFormLayout, group.layout())
-        form.insertRow(3, "Usage history", clear_history_button)
+        form.insertRow(4, "Usage history", clear_history_button)
         return group
 
     def _results_group(self):
@@ -641,9 +866,15 @@ class SettingsEditorPanel(QFrame):
         opacity.setSingleStep(0.05)
         opacity.setDecimals(2)
         opacity.setValue(ui.window_opacity)
+        theme_choice = self._choice(ui.theme, THEME_LABELS)
+        theme_choice.setToolTip("System follows the Windows light or dark app mode")
+        self._size_choice = self._choice(size_preset(ui), SIZE_LABELS)
+        self._size_choice.setToolTip("Sets the launcher's width, heights and text sizes together")
         return self._group(
-            "Layout",
+            "Appearance",
             [
+                ("Theme", "ui.theme", theme_choice),
+                ("Size", "ui.size_preset", self._size_choice),
                 ("Width", "ui.program_width", self._spin(ui.program_width, 280, 2000)),
                 ("Search box height", "ui.search_height", self._spin(ui.search_height, 50, 400)),
                 ("Results height", "ui.results_height", self._spin(ui.results_height, 80, 1000)),
@@ -653,20 +884,44 @@ class SettingsEditorPanel(QFrame):
         )
 
     def _text_group(self):
-        """One row per piece of text: its size, then its colour(s)."""
+        """One row per piece of text: its size, then its color(s)."""
         ui = self._settings.ui
+
+        def size(value, minimum, maximum, name):
+            control = self._spin(value, minimum, maximum)
+            control.setAccessibleName(name)
+            return control
+
         return self._group(
             "Text",
             [
-                ("Search box", [("ui.search_font_size", self._spin(ui.search_font_size, 8, 48)), ("ui.search_text_color", self._color(ui.search_text_color))]),
-                ("Result names", [("ui.result_font_size", self._spin(ui.result_font_size, 8, 32)), ("ui.result_text_color", self._color(ui.result_text_color))]),
-                ("Descriptions", [("ui.description_font_size", self._spin(ui.description_font_size, 7, 24)), ("ui.description_text_color", self._color(ui.description_text_color))]),
+                (
+                    "Search box",
+                    [
+                        ("ui.search_font_size", size(ui.search_font_size, 8, 48, "Search box text size")),
+                        ("ui.search_text_color", self._color(ui.search_text_color, "Search box text color")),
+                    ],
+                ),
+                (
+                    "Result names",
+                    [
+                        ("ui.result_font_size", size(ui.result_font_size, 8, 32, "Result name text size")),
+                        ("ui.result_text_color", self._color(ui.result_text_color, "Result name text color")),
+                    ],
+                ),
+                (
+                    "Descriptions",
+                    [
+                        ("ui.description_font_size", size(ui.description_font_size, 7, 24, "Description text size")),
+                        ("ui.description_text_color", self._color(ui.description_text_color, "Description text color")),
+                    ],
+                ),
                 ("Clock size", "ui.clock_font_size", self._spin(ui.clock_font_size, 6, 18)),
                 (
                     "Clock day, date",
                     [
-                        ("ui.clock_day_text_color", self._color(ui.clock_day_text_color)),
-                        ("ui.clock_date_text_color", self._color(ui.clock_date_text_color)),
+                        ("ui.clock_day_text_color", self._color(ui.clock_day_text_color, "Clock day text color")),
+                        ("ui.clock_date_text_color", self._color(ui.clock_date_text_color, "Clock date text color")),
                     ],
                 ),
             ],
@@ -677,6 +932,11 @@ class SettingsEditorPanel(QFrame):
         layout = QVBoxLayout(group)
         layout.setContentsMargins(14, 14, 14, 10)
         layout.setSpacing(4)
+
+        manage_button = QPushButton("Manage Commands...")
+        manage_button.setCursor(Qt.CursorShape.PointingHandCursor)
+        manage_button.setToolTip("See every command in one list to edit or delete them")
+        manage_button.clicked.connect(self.manageCommandsRequested.emit)
 
         auto_populate_button = QPushButton("Find Recommended Commands...")
         auto_populate_button.setCursor(Qt.CursorShape.PointingHandCursor)
@@ -690,10 +950,75 @@ class SettingsEditorPanel(QFrame):
         import_button.setCursor(Qt.CursorShape.PointingHandCursor)
         import_button.clicked.connect(self.importCommandsRequested.emit)
 
+        layout.addWidget(manage_button)
         layout.addWidget(auto_populate_button)
         layout.addWidget(export_button)
         layout.addWidget(import_button)
         return group
+
+    # --------------------------------------------------- dependent rows
+
+    def _set_row_visible(self, control, visible: bool):
+        """Show or hide a form row by its field, wherever it sits."""
+        parent = control.parentWidget()
+        form = parent.layout() if parent is not None else None
+        if isinstance(form, QFormLayout):
+            form.setRowVisible(control, visible)
+
+    def _update_hotkey_warning(self):
+        warning = hotkey_warning(self._value("general.hotkey"))
+        self._hotkey_warning.setText(warning or "")
+        self._set_row_visible(self._hotkey_warning, bool(warning))
+
+    def _update_web_search_rows(self):
+        custom = self._controls["general.web_search"].currentData() == WEB_SEARCH_CUSTOM
+        self._set_row_visible(self._web_search_custom, custom)
+        problem = web_search_problem(self._web_search_custom.text()) if custom else None
+        self._web_search_problem.setText(problem or "")
+        self._set_row_visible(self._web_search_problem, bool(problem))
+
+    def _web_search_url(self) -> str:
+        preset = self._controls["general.web_search"].currentData()
+        if preset == WEB_SEARCH_CUSTOM:
+            return self._web_search_custom.text().strip()
+        stored = self._settings.general.web_search
+        if preset == web_search_preset(stored):
+            return stored  # the same engine, spelled as the file had it
+        return web_search_url_for(preset) or stored
+
+    def _size_values(self) -> dict[str, int]:
+        return {key: int(self._value(f"ui.{key}")) for key in SIZE_KEYS}
+
+    def _on_size_preset_chosen(self, _index=None):
+        """A preset fills in all six sizes; Custom keeps them and shows the boxes."""
+        preset = SIZE_PRESETS.get(self._size_choice.currentData())
+        if preset is not None:
+            for key, value in preset.items():
+                control = self._controls[f"ui.{key}"]
+                control.blockSignals(True)
+                control.setValue(value)
+                control.blockSignals(False)
+        self._update_size_rows()
+        self._update_dirty_state()
+
+    def _on_size_value_changed(self, _value=None):
+        """Changing one size by hand (a text size, say) makes the choice Custom."""
+        matched = size_preset(self._size_values())
+        current = self._size_choice.currentData()
+        # Custom stays Custom even when the numbers land on a preset, so the
+        # boxes being edited do not vanish mid-edit.
+        if matched != current and current != SIZE_CUSTOM:
+            self._size_choice.blockSignals(True)
+            self._size_choice.setCurrentIndex(self._size_choice.findData(matched))
+            self._size_choice.blockSignals(False)
+            self._update_size_rows()
+
+    def _update_size_rows(self):
+        custom = self._size_choice.currentData() == SIZE_CUSTOM
+        for key in ("ui.program_width", "ui.search_height", "ui.results_height"):
+            self._set_row_visible(self._controls[key], custom)
+
+    # ------------------------------------------------------ values
 
     def _value(self, key) -> Any:
         control = self._controls[key]
@@ -714,11 +1039,14 @@ class SettingsEditorPanel(QFrame):
                 launcher_screen=str(self._value("general.launcher_screen") or "mouse"),
                 browser=str(self._value("general.browser") or DEFAULT_BROWSER),
                 check_updates_on_startup=bool(self._value("general.check_updates_on_startup")),
-                web_search=str(self._value("general.web_search") or ""),
+                web_search=self._web_search_url(),
                 web_search_enabled=bool(self._value("general.web_search_enabled")),
                 switch_to_open_apps=bool(self._value("general.switch_to_open_apps")),
+                hide_when_focus_lost=bool(self._value("general.hide_when_focus_lost")),
+                download_favicons=bool(self._value("general.download_favicons")),
             ),
             ui=UISettings(
+                theme=str(self._value("ui.theme") or "system"),
                 program_width=self._value("ui.program_width"),
                 search_height=self._value("ui.search_height"),
                 results_height=self._value("ui.results_height"),
@@ -739,6 +1067,7 @@ class SettingsEditorPanel(QFrame):
                 max_results=self._value("search.max_results"),
                 autocomplete=self._value("search.autocomplete"),
                 ignore_case=bool(self._value("search.ignore_case")),
+                match_word_starts=bool(self._value("search.match_word_starts")),
                 sort_results=self._value("search.sort_results"),
                 show_descriptions=self._value("search.show_descriptions"),
                 show_run_counter=self._value("search.show_run_counter"),
@@ -762,14 +1091,20 @@ class SettingsEditorPanel(QFrame):
             or asdict(current.shortcuts) != asdict(self._settings.shortcuts)
         )
 
+    def _is_valid(self) -> bool:
+        if self._controls["general.web_search"].currentData() == WEB_SEARCH_CUSTOM:
+            return web_search_problem(self._web_search_custom.text()) is None
+        return True
+
     def _update_dirty_state(self):
         dirty = self._is_dirty()
         self.close_button.setVisible(not dirty)
         self.cancel_button.setVisible(dirty)
         self.save_button.setVisible(dirty)
+        self.save_button.setEnabled(self._is_valid())
 
     def _connect_signals(self):
-        for control in self._controls.values():
+        for key, control in self._controls.items():
             if isinstance(control, ColorButton):
                 control.colorChanged.connect(self._update_dirty_state)
             elif isinstance(control, QComboBox):
@@ -779,12 +1114,28 @@ class SettingsEditorPanel(QFrame):
             elif isinstance(control, QCheckBox):
                 control.toggled.connect(self._update_dirty_state)
             elif isinstance(control, (QSpinBox, QDoubleSpinBox)):
+                if key.removeprefix("ui.") in SIZE_KEYS:
+                    control.valueChanged.connect(self._on_size_value_changed)
                 control.valueChanged.connect(self._update_dirty_state)
+        self._size_choice.currentIndexChanged.connect(self._on_size_preset_chosen)
+        self._controls["general.hotkey"].textChanged.connect(self._update_hotkey_warning)
+        self._controls["general.web_search"].currentIndexChanged.connect(self._update_web_search_rows)
+        self._web_search_custom.textChanged.connect(self._update_web_search_rows)
+        self._web_search_custom.textChanged.connect(self._update_dirty_state)
 
     def _save(self):
+        if not self._is_valid():
+            return
         settings = self._collect()
         settings.save(self._settings_path)
+        theme_changed = settings.ui.theme != self._settings.ui.theme
+        if theme_changed:
+            # Re-theme before the window reacts to the new settings, so
+            # anything it redraws already uses the new colors.
+            name = theme.apply_theme(QApplication.instance(), settings)
         self.saved.emit(settings)
+        if theme_changed:
+            self.themeChanged.emit(name)
         self.closed.emit()
 
     def _cancel(self):
@@ -836,6 +1187,26 @@ def usage_summary(candidate: dict) -> str:
     return ""
 
 
+# Opened within this many days counts as "recently used": ticked from the
+# start in Find Recommended Commands.
+RECENT_USAGE_DAYS = 60
+
+
+def recently_used(candidate: dict, now: float | None = None) -> bool:
+    """Whether the system's record says the candidate was opened lately.
+
+    Only a date counts: a count on its own may be years old.
+    """
+    try:
+        last_opened = float(candidate.get("last_opened") or 0)
+    except (TypeError, ValueError):
+        return False
+    if last_opened <= 0:
+        return False
+    now = time.time() if now is None else now
+    return now - last_opened <= RECENT_USAGE_DAYS * 86_400
+
+
 class ProgramImportDialog(DragToMoveMixin, QDialog):
     """Choose what the scan found before it becomes commands.
 
@@ -868,7 +1239,8 @@ class ProgramImportDialog(DragToMoveMixin, QDialog):
         title = QLabel("Recommended Commands")
         title.setObjectName("dialogTitle")
         subtitle = QLabel(
-            "Found on this PC, most used first. Tick what Dash should know about; nothing is added until you choose it."
+            "Found on this PC, most used first. What you opened lately is already ticked; "
+            "nothing is added until you choose Add."
         )
         subtitle.setObjectName("dialogSubtitle")
         subtitle.setWordWrap(True)
@@ -895,11 +1267,16 @@ class ProgramImportDialog(DragToMoveMixin, QDialog):
         empty_message.setVisible(not selectable)
         self.tabs.setVisible(bool(selectable))
 
+        select_recent_button = QPushButton("Select recently used")
+        select_recent_button.setToolTip(f"Tick everything opened in the last {RECENT_USAGE_DAYS} days, on every tab")
         select_all_button = QPushButton("Select all on this tab")
         select_none_button = QPushButton("Select none")
-        for button in (select_all_button, select_none_button):
+        for button in (select_recent_button, select_all_button, select_none_button):
             button.setObjectName("programImportSelectButton")
+            button.setCursor(Qt.CursorShape.PointingHandCursor)
             button.setEnabled(bool(selectable))
+        select_recent_button.setEnabled(any(recently_used(c) for c in selectable))
+        select_recent_button.clicked.connect(self.select_recently_used)
         select_all_button.clicked.connect(lambda: self._set_visible_checked(Qt.CheckState.Checked))
         select_none_button.clicked.connect(lambda: self._set_visible_checked(Qt.CheckState.Unchecked))
 
@@ -909,6 +1286,7 @@ class ProgramImportDialog(DragToMoveMixin, QDialog):
         selection_row = QHBoxLayout()
         selection_row.addWidget(self.selected_label)
         selection_row.addStretch(1)
+        selection_row.addWidget(select_recent_button)
         selection_row.addWidget(select_all_button)
         selection_row.addWidget(select_none_button)
 
@@ -933,12 +1311,14 @@ class ProgramImportDialog(DragToMoveMixin, QDialog):
         filter_box = QLineEdit()
         filter_box.setPlaceholderText(f"Filter {self._heading(kind).lower()}...")
         filter_box.setClearButtonEnabled(True)
+        filter_box.setAccessibleName(f"Filter {self._heading(kind).lower()}")
         list_widget = QListWidget()
         list_widget.setObjectName("ScanResultList")
+        list_widget.setAccessibleName(self._heading(kind))
         # Long URLs would otherwise add a scrollbar under every page.
         list_widget.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         for candidate in group:
-            self._add_item(list_widget, candidate)
+            self._add_item(list_widget, candidate, checked=recently_used(candidate))
         filter_box.textChanged.connect(lambda text, lw=list_widget: self._apply_filter(lw, text))
         list_widget.setSelectionMode(QListWidget.SelectionMode.NoSelection)
         list_widget.itemClicked.connect(self._toggle_item)  # clicking the row ticks it
@@ -1061,6 +1441,17 @@ class ProgramImportDialog(DragToMoveMixin, QDialog):
                 widget.check.setChecked(state == Qt.CheckState.Checked)
         self._refresh_selection_count()
 
+    def select_recently_used(self):
+        """Tick every recently opened entry on every tab, whatever the filter."""
+        for list_widget in self.lists.values():
+            for index in range(list_widget.count()):
+                item = list_widget.item(index)
+                widget = self._row_widget(item) if item is not None else None
+                candidate = item.data(Qt.ItemDataRole.UserRole) if item is not None else None
+                if widget is not None and widget.check.isEnabled() and recently_used(candidate or {}):
+                    widget.check.setChecked(True)
+        self._refresh_selection_count()
+
     def _refresh_selection_count(self):
         count = len(self.selected_candidates())
         self.selected_label.setText(f"{count} selected" if count else "Nothing selected yet")
@@ -1125,11 +1516,13 @@ class ImportRow(QWidget):
 
         self.edit_button = QToolButton()
         self.edit_button.setObjectName("ResultEditButton")
-        self.edit_button.setIcon(QIcon(glyph_pixmap(OutlineIcon.PENCIL, 18, QColor("#8b929e"))))
+        self.edit_button.setIcon(QIcon(glyph_pixmap(OutlineIcon.PENCIL, 18, theme.color("text_muted"))))
         self.edit_button.setIconSize(QSize(18, 18))
         self.edit_button.setFixedSize(30, 30)
         self.edit_button.setCursor(Qt.CursorShape.PointingHandCursor)
         self.edit_button.setToolTip("Edit name, aliases or icon before adding")
+        self.edit_button.setAccessibleName(f"Edit {candidate.get('name', '')} before adding")
+        self.check.setAccessibleName(f"Add {candidate.get('name', '')}")
 
         layout = QHBoxLayout(self)
         layout.setContentsMargins(10, 8, 8, 8)
@@ -1157,6 +1550,7 @@ class ExportCommandsDialog(DragToMoveMixin, QDialog):
 
         self.command_list = QListWidget()
         self.command_list.setObjectName("ProgramImportList")
+        self.command_list.setAccessibleName("Commands to export")
         self.command_list.setIconSize(QSize(28, 28))
 
         commands = sorted(commands, key=lambda c: str(c.get("name", "")).lower())
@@ -1242,6 +1636,246 @@ class ExportCommandsDialog(DragToMoveMixin, QDialog):
         return selected
 
 
+def groups_containing(command_manager, name: str) -> list[str]:
+    """Names of the groups that open ``name``.
+
+    Uses CommandManager.groups_containing when it exists, and otherwise
+    looks through the loaded commands for groups listing it as a target.
+    """
+    if command_manager is None:
+        return []
+    finder = getattr(command_manager, "groups_containing", None)
+    if callable(finder):
+        try:
+            return [str(group) for group in finder(name)]
+        except Exception:
+            log.exception("Could not look up the groups containing %r", name)
+            return []
+    wanted = str(name).casefold()
+    commands = getattr(command_manager, "commands", {}) or {}
+    return sorted(
+        str(command.get("name", ""))
+        for command in commands.values()
+        if command.get("type") == "group" and any(str(target).casefold() == wanted for target in command.get("targets", []))
+    )
+
+
+def delete_confirmation_text(names: list[str], groups_by_name: dict[str, list[str]]) -> str:
+    """The question asked before deleting: how many, and which groups lose them.
+
+    Groups that are themselves being deleted are not mentioned.
+    """
+    count = len(names)
+    if count == 1:
+        question = f"Delete \"{names[0]}\"? This cannot be undone."
+    else:
+        question = f"Delete {count} commands? This cannot be undone."
+    deleting = {name.casefold() for name in names}
+    affected: dict[str, list[str]] = {}
+    for name in names:
+        for group in groups_by_name.get(name, []):
+            if group.casefold() not in deleting:
+                affected.setdefault(group, []).append(name)
+    if not affected:
+        return question
+    if count == 1:
+        heading = "Groups that open it will report it as missing:"
+        lines = sorted(affected, key=str.casefold)
+    else:
+        heading = "Groups that open them will report them as missing:"
+        lines = [f"{group}: {', '.join(members)}" for group, members in sorted(affected.items(), key=lambda pair: pair[0].casefold())]
+    return f"{question}\n\n{heading}\n" + "\n".join(lines)
+
+
+class ManageCommandsDialog(DragToMoveMixin, QDialog):
+    """Every command in one list: filter it, edit one, or delete several.
+
+    Deleting happens here, after a confirmation that says how many and which
+    groups open them. Editing is the main window's job: ``editRequested``
+    carries the command's name and the dialog closes so the editor can open.
+    """
+
+    editRequested = pyqtSignal(str)
+    commandsDeleted = pyqtSignal(list)
+
+    def __init__(self, commands: list[dict], command_manager, icon_manager=None, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Manage Commands")
+        self.setObjectName("ProgramImportDialog")
+        self.setWindowFlags(FRAMELESS_DIALOG)
+        self.setMinimumSize(560, 640)
+        self._command_manager = command_manager
+        self._icon_manager = icon_manager
+        self._icon_provider = QFileIconProvider()
+
+        title = QLabel("Manage Commands")
+        title.setObjectName("dialogTitle")
+
+        self.filter_box = QLineEdit()
+        self.filter_box.setPlaceholderText("Filter by name, alias or target...")
+        self.filter_box.setClearButtonEnabled(True)
+        self.filter_box.setAccessibleName("Filter commands")
+        self.filter_box.textChanged.connect(self._apply_filter)
+
+        self.command_list = QListWidget()
+        self.command_list.setObjectName("ProgramImportList")
+        self.command_list.setAccessibleName("Commands")
+        self.command_list.setIconSize(QSize(28, 28))
+        self.command_list.setSelectionMode(QListWidget.SelectionMode.ExtendedSelection)
+        self.command_list.itemSelectionChanged.connect(self._update_buttons)
+        self.command_list.itemDoubleClicked.connect(lambda item: self._request_edit(item))
+
+        commands = sorted(
+            (c for c in commands if c.get("type") != "system"),
+            key=lambda c: str(c.get("name", "")).casefold(),
+        )
+        for command in commands:
+            detail = command.get("location", "")
+            if command.get("type") == "group":
+                detail = "Opens " + ", ".join(str(t) for t in command.get("targets", []))
+            item = QListWidgetItem(f"{command.get('name', '')}\n{detail}")
+            item.setIcon(self._resolve_icon(command))
+            item.setData(Qt.ItemDataRole.UserRole, command.get("name"))
+            item.setData(Qt.ItemDataRole.UserRole + 1, command)
+            item.setToolTip(str(detail))
+            self.command_list.addItem(item)
+
+        self.count_label = QLabel()
+        self.count_label.setObjectName("dialogSubtitle")
+        self.empty_message = QLabel("No commands yet." if not commands else "")
+        self.empty_message.setObjectName("dialogSubtitle")
+        self.empty_message.setVisible(not commands)
+
+        self.edit_button = QPushButton("Edit...")
+        self.edit_button.setToolTip("Open the selected command in the editor")
+        self.edit_button.clicked.connect(lambda: self._request_edit())
+        self.delete_button = QPushButton("Delete Selected...")
+        self.delete_button.setToolTip("Delete the selected commands")
+        self.delete_button.clicked.connect(self.delete_selected)
+        for button in (self.edit_button, self.delete_button):
+            button.setCursor(Qt.CursorShape.PointingHandCursor)
+        # Enter in the filter box should never be the one that deletes.
+        self.delete_button.setAutoDefault(False)
+
+        actions = QHBoxLayout()
+        actions.addWidget(self.count_label)
+        actions.addStretch(1)
+        actions.addWidget(self.edit_button)
+        actions.addWidget(self.delete_button)
+
+        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Close)
+        buttons.rejected.connect(self.reject)
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(20, 18, 20, 18)
+        layout.setSpacing(12)
+        layout.addWidget(title)
+        layout.addWidget(self.filter_box)
+        layout.addWidget(self.command_list, 1)
+        layout.addWidget(self.empty_message)
+        layout.addLayout(actions)
+        layout.addWidget(buttons)
+        self._update_buttons()
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        parent = self.parentWidget()
+        fit_within_screen(self, parent.frameGeometry().center() if parent is not None else None)
+        self.raise_()
+        self.activateWindow()
+        self.filter_box.setFocus()
+
+    def _resolve_icon(self, command: dict) -> QIcon:
+        if self._icon_manager is not None:
+            icon = self._icon_manager.resolve_command_icon(command)
+            if not icon.isNull():
+                return icon
+        location = command.get("location", "")
+        info = QFileInfo(str(location))
+        if location and info.exists():
+            icon = self._icon_provider.icon(info)
+            if not icon.isNull():
+                return icon
+        return QIcon()
+
+    def _items(self) -> list[QListWidgetItem]:
+        return [item for item in (self.command_list.item(i) for i in range(self.command_list.count())) if item is not None]
+
+    def _apply_filter(self, text: str):
+        needle = text.strip().casefold()
+        for item in self._items():
+            command = item.data(Qt.ItemDataRole.UserRole + 1) or {}
+            haystack = " ".join(
+                [str(command.get("name", "")), str(command.get("location", "")), *map(str, command.get("aliases", []))]
+            ).casefold()
+            hidden = bool(needle) and needle not in haystack
+            item.setHidden(hidden)
+            if hidden:
+                item.setSelected(False)
+        self._update_buttons()
+
+    def selected_names(self) -> list[str]:
+        """Selected commands that the filter is showing, in list order."""
+        return [item.data(Qt.ItemDataRole.UserRole) for item in self._items() if item.isSelected() and not item.isHidden()]
+
+    def _update_buttons(self):
+        selected = self.selected_names()
+        shown = sum(1 for item in self._items() if not item.isHidden())
+        total = self.command_list.count()
+        self.edit_button.setEnabled(len(selected) == 1)
+        self.delete_button.setEnabled(bool(selected))
+        self.delete_button.setText(f"Delete {len(selected)} Selected..." if len(selected) > 1 else "Delete Selected...")
+        summary = f"{total} command{'s' if total != 1 else ''}" if shown == total else f"{shown} of {total} shown"
+        if selected:
+            summary += f", {len(selected)} selected"
+        self.count_label.setText(summary)
+
+    def _request_edit(self, item: QListWidgetItem | None = None):
+        if item is not None:
+            name = item.data(Qt.ItemDataRole.UserRole)
+        else:
+            selected = self.selected_names()
+            if len(selected) != 1:
+                return
+            name = selected[0]
+        self.editRequested.emit(str(name))
+        self.accept()
+
+    def _confirm_delete(self, names: list[str]) -> bool:
+        groups = {name: groups_containing(self._command_manager, name) for name in names}
+        answer = QMessageBox.question(
+            self,
+            "Delete Commands",
+            delete_confirmation_text(names, groups),
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel,
+            QMessageBox.StandardButton.Cancel,
+        )
+        return answer == QMessageBox.StandardButton.Yes
+
+    def delete_selected(self):
+        names = self.selected_names()
+        if not names or not self._confirm_delete(names):
+            return
+        deleted = []
+        for name in names:
+            try:
+                self._command_manager.delete_command(name)
+                deleted.append(name)
+            except Exception as error:
+                log.exception("Could not delete command %r", name)
+                QMessageBox.warning(self, "Delete Commands", f"Could not delete \"{name}\": {error}")
+                break
+        gone = set(deleted)
+        for item in self._items():
+            if item.data(Qt.ItemDataRole.UserRole) in gone:
+                self.command_list.takeItem(self.command_list.row(item))
+        self.empty_message.setText("No commands left." if not self.command_list.count() else "")
+        self.empty_message.setVisible(not self.command_list.count())
+        self._update_buttons()
+        if deleted:
+            self.commandsDeleted.emit(deleted)
+
+
 class ImportCommandsDialog(DragToMoveMixin, QDialog):
     """Review commands parsed from an imported file before adding them.
 
@@ -1273,6 +1907,7 @@ class ImportCommandsDialog(DragToMoveMixin, QDialog):
 
         self.command_list = QListWidget()
         self.command_list.setObjectName("ScanResultList")
+        self.command_list.setAccessibleName("Commands to import")
         self.command_list.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.command_list.setSelectionMode(QListWidget.SelectionMode.NoSelection)
         self.command_list.itemClicked.connect(self._toggle_item)

@@ -69,7 +69,6 @@ class ConflictWarningTests(unittest.TestCase):
             "Ctrl+V": "Paste",
             "Ctrl+Z": "Undo",
             "Ctrl+Space": "input method",
-            "Alt+Space": "window's menu",
             "K": "used for typing",
             "Shift+K": "used for typing",
             "F1": "Help",
@@ -82,7 +81,7 @@ class ConflictWarningTests(unittest.TestCase):
                 self.assertNotIn("—", warning)
 
     def test_uncommon_combinations_are_fine(self):
-        for hotkey in ("Ctrl+Shift+K", "Ctrl+Alt+D", "Win+Shift+Space", "F9", "Ctrl+`"):
+        for hotkey in ("Alt+Space", "Ctrl+Shift+K", "Ctrl+Alt+D", "Win+Shift+Space", "F9", "Ctrl+`"):
             with self.subTest(hotkey=hotkey):
                 self.assertIsNone(hotkey_conflict_warning(hotkey))
 

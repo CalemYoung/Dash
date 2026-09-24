@@ -433,7 +433,10 @@ def main():
     from PyQt6.QtWidgets import QApplication
 
     app = QApplication(sys.argv)
-    app.setStyleSheet((ROOT / "style.qss").read_text(encoding="utf-8"))
+    from src import theme
+
+    # The README demos are recorded in the dark theme.
+    app.setStyleSheet(theme.render_stylesheet((ROOT / "style.qss").read_text(encoding="utf-8"), theme.DARK))
 
     for name in wanted:
         filename, scene = SCENES[name]

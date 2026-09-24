@@ -1392,7 +1392,9 @@ class IconStudio(DragToMoveMixin, QMainWindow):
 def main():
     app = QApplication(sys.argv)
     app.setStyle("Fusion")  # consistent base across platforms for the stylesheet
-    app.setStyleSheet(load_stylesheet())
+    from . import theme
+
+    app.setStyleSheet(theme.render_stylesheet(load_stylesheet(), theme.PALETTES[theme.resolve_theme("system")]))
     window = IconStudio(standalone=True)
     window.show()
     sys.exit(app.exec())

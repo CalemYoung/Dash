@@ -64,6 +64,7 @@ try:
     from src.launcher_gui import MainWindow
     from src.launcher_hotkey import HotkeyListener
     from src.settings import Settings
+    from src import theme
     from src.single_instance import SHOW_MESSAGE, SingleInstanceServer, notify_running_instance
     from src.version import current_version
     from PyQt6.QtCore import QTimer
@@ -133,13 +134,14 @@ if __name__ == "__main__":
         if notify_running_instance(SHOW_MESSAGE):
             sys.exit(0)
 
-        style_path = get_resource_path("style.qss")
-        if style_path.exists():
-            app.setStyleSheet(style_path.read_text(encoding="utf-8"))
-
         # Load settings from AppData (creates default if needed)
         settings_path = get_resource_path("config/settings.toml")
         settings = Settings.load_or_create_default(settings_path)
+
+        # style.qss is a template; the theme setting picks its colors.
+        style_path = get_resource_path("style.qss")
+        if style_path.exists():
+            theme.apply_theme(app, settings, style_path.read_text(encoding="utf-8"))
 
         # Load commands from AppData (creates default if needed)
         commands_path = get_resource_path("config/commands.toml")

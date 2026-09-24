@@ -157,10 +157,6 @@ _EXACT_WARNINGS = {
     (MOD_ALT, "tab"): "Windows uses Alt+Tab to switch between windows. Choose a different key.",
     (MOD_ALT, "f4"): "Alt+F4 closes the active window, so apps could no longer be closed with it.",
     (MOD_ALT, "esc"): "Windows uses Alt+Esc to cycle through windows.",
-    (MOD_ALT, "space"): (
-        "Alt+Space normally opens the active window's menu (Move, Size, Close). "
-        "While Dash is running it opens Dash instead."
-    ),
     (MOD_CONTROL, "space"): (
         "Ctrl+Space switches the input method on some keyboards and shows suggestions in many editors."
     ),
