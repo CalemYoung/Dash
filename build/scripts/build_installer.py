@@ -7,6 +7,7 @@ script generates the PyInstaller version resource from it and passes it to
 Inno Setup on the command line, so no committed file has to be rewritten.
 """
 
+import datetime
 import re
 import shutil
 import subprocess
@@ -18,6 +19,13 @@ VERSION_FILE = PROJECT_ROOT / "build" / "installer" / "version.txt"
 VERSION_INFO_FILE = PROJECT_ROOT / "build" / "installer" / "version_info.txt"
 INSTALLER_SCRIPT = PROJECT_ROOT / "build" / "installer" / "installer.iss"
 DIST_DIR = PROJECT_ROOT / "dist"
+FIRST_RELEASE_YEAR = 2025
+
+
+def copyright_years() -> str:
+    """"2025-<year of this build>", shared by the exe and the installer."""
+    year = datetime.date.today().year
+    return f"{FIRST_RELEASE_YEAR}-{year}" if year > FIRST_RELEASE_YEAR else str(FIRST_RELEASE_YEAR)
 
 
 def clean_build_folders():
@@ -47,7 +55,7 @@ def build_executable():
         print(f"Failed to build executable: {e}\n")
         return False
     except FileNotFoundError:
-        print("PyInstaller not found. Install it with: pip install pyinstaller\n")
+        print("PyInstaller not found. Install the build tools with: pip install -r requirements-dev.txt\n")
         return False
 
 
@@ -95,7 +103,7 @@ VSVersionInfo(
         StringStruct(u'FileDescription', u'Dash - Quick Program Launcher'),
         StringStruct(u'FileVersion', u'{version_str}'),
         StringStruct(u'InternalName', u'Dash'),
-        StringStruct(u'LegalCopyright', u'Copyright (C) 2025 Calem Young'),
+        StringStruct(u'LegalCopyright', u'Copyright (C) {copyright_years()} Calem Young'),
         StringStruct(u'OriginalFilename', u'Dash.exe'),
         StringStruct(u'ProductName', u'Dash'),
         StringStruct(u'ProductVersion', u'{version_str}')])
@@ -144,6 +152,7 @@ def build_installer(version):
                 inno_setup_path,
                 f"/DMyAppVersion={version}",
                 f"/DMyAppNumericVersion={numeric_version(version)}",
+                f"/DMyAppCopyrightYears={copyright_years()}",
                 str(INSTALLER_SCRIPT),
             ],
             check=True,

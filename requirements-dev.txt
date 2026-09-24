@@ -1,0 +1,5 @@
+# Everything needed to run Dash, plus the tools to test it and build the
+# installer. Inno Setup 6 is installed separately (see CONTRIBUTING.md).
+-r requirements.txt
+PyInstaller>=6,<7
+pytest>=8,<10

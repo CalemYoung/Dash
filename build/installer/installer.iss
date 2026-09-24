@@ -17,6 +17,13 @@
 #define MyAppURL "https://github.com/calemyoung/Dash"
 #define MyAppExeName "Dash.exe"
 #define MyAppDescription "A quick program launcher for Windows"
+; Copyright years run from the first release (2025) to the year of the
+; build, so they never go stale. build_installer.py passes the same value
+; here and to the exe's version resource; the fallback covers compiling this
+; script directly.
+#ifndef MyAppCopyrightYears
+  #define MyAppCopyrightYears "2025-" + GetDateTimeString('yyyy', '', '')
+#endif
 
 [Setup]
 ; Note the doubled closing brace: Inno escapes "{{" to "{" but leaves "}}"
@@ -32,7 +39,7 @@ AppPublisher={#MyAppPublisher}
 AppPublisherURL={#MyAppURL}
 AppSupportURL={#MyAppURL}
 AppUpdatesURL={#MyAppURL}
-AppCopyright=Copyright (C) 2025 {#MyAppPublisher}
+AppCopyright=Copyright (C) {#MyAppCopyrightYears} {#MyAppPublisher}
 
 ; Installation directories
 DefaultDirName={autopf}\{#MyAppName}
@@ -62,7 +69,7 @@ PrivilegesRequiredOverridesAllowed=dialog
 VersionInfoVersion={#MyAppNumericVersion}
 VersionInfoCompany={#MyAppPublisher}
 VersionInfoDescription={#MyAppDescription}
-VersionInfoCopyright=Copyright (C) 2025 {#MyAppPublisher}
+VersionInfoCopyright=Copyright (C) {#MyAppCopyrightYears} {#MyAppPublisher}
 VersionInfoProductName={#MyAppName}
 VersionInfoProductVersion={#MyAppNumericVersion}
 
@@ -79,7 +86,7 @@ Name: "english"; MessagesFile: "compiler:Default.isl"
 [Tasks]
 Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{cm:AdditionalIcons}"; Flags: unchecked
 ; Ticked by default: Dash is a background hotkey launcher, so it is only
-; useful once it is already running when you press Alt+F.
+; useful once it is already running when you press its hotkey.
 Name: "startup"; Description: "Start {#MyAppName} automatically when Windows starts"; GroupDescription: "Startup Options:"
 
 [Files]
@@ -104,19 +111,23 @@ Name: "{userappdata}\{#MyAppName}\assets\icons"; Flags: uninsneveruninstall
 
 [Icons]
 ; Start menu shortcuts
-Name: "{group}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; Comment: "Quick command Dash - Press Alt+F to open"
-Name: "{group}\Edit Settings"; Filename: "notepad.exe"; Parameters: """{userappdata}\{#MyAppName}\config\settings.toml"""; Comment: "Customize Dash settings"
-Name: "{group}\Edit Commands"; Filename: "notepad.exe"; Parameters: """{userappdata}\{#MyAppName}\config\commands.toml"""; Comment: "Add or modify commands"
+Name: "{group}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; Comment: "Open Dash, the keyboard launcher"
+; Settings and commands are edited inside Dash (Ctrl+, and Ctrl+Enter), so
+; there are no shortcuts that open the raw TOML files in Notepad.
 Name: "{group}\Open Config Folder"; Filename: "{userappdata}\{#MyAppName}"; Comment: "Open the configuration folder"
 Name: "{group}\{cm:UninstallProgram,{#MyAppName}}"; Filename: "{uninstallexe}"; Comment: "Remove Dash from your computer"
 
 ; Desktop shortcut (optional)
-Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; Tasks: desktopicon; Comment: "Quick command Dash - Press Alt+F to open"
+Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; Tasks: desktopicon; Comment: "Open Dash, the keyboard launcher"
 
 [Registry]
 ; Add to Windows startup (optional task). --startup tells Dash it was started
 ; by Windows, so it stays in the tray; any other launch shows the search bar.
 Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueType: string; ValueName: "{#MyAppName}"; ValueData: """{app}\{#MyAppExeName}"" --startup"; Flags: uninsdeletevalue; Tasks: startup
+; Reinstalling or upgrading with the task unticked removes an earlier entry.
+; Dash itself never writes to the Run key, so "Dash" is the only value name
+; to clean up.
+Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueType: none; ValueName: "{#MyAppName}"; Flags: deletevalue; Tasks: not startup
 
 ; Register application
 Root: HKCU; Subkey: "Software\{#MyAppPublisher}\{#MyAppName}"; ValueType: string; ValueName: "InstallPath"; ValueData: "{app}"; Flags: uninsdeletekey
@@ -137,6 +148,7 @@ Filename: "taskkill"; Parameters: "/F /IM {#MyAppExeName}"; Flags: runhidden; Ru
 [Code]
 var
   AppDataPath: String;
+  DeleteUserData: Boolean;
 
 // Silent installs stay silent unless the caller asks for a relaunch.
 function ShouldLaunchAfterInstall(): Boolean;
@@ -201,37 +213,58 @@ begin
   end;
 end;
 
-// Custom uninstall message
+// Ask whether to delete the user's data as well. Nothing is deleted here:
+// the choice is only recorded, and the folder is removed after the
+// uninstall has finished (see CurUninstallStepChanged), so cancelling or a
+// failed uninstall never costs anyone their commands.
+//
+// Silent uninstalls (winget uninstall, /SILENT, /VERYSILENT) never prompt
+// and always keep the data. SuppressibleMsgBox returns the default (IDNO,
+// keep) when /SUPPRESSMSGBOXES is given.
 function InitializeUninstall(): Boolean;
-var
-  Response: Integer;
 begin
   AppDataPath := ExpandConstant('{userappdata}\{#MyAppName}');
+  DeleteUserData := False;
   Result := True;
-  
-  Response := MsgBox('Do you want to keep your personal settings and commands?' + #13#10 + #13#10 + 
-            'Choose "Yes" to preserve your configuration files in:' + #13#10 +
-            AppDataPath + #13#10 + #13#10 +
-            'Choose "No" to remove everything (fresh start).', 
-            mbConfirmation, MB_YESNO or MB_DEFBUTTON1);
-  
-  if Response = IDNO then
-  begin
-    // User wants to delete everything
-    if DirExists(AppDataPath) then
-    begin
-      DelTree(AppDataPath, True, True, True);
-      Log('Deleted AppData folder at user request');
-      MsgBox('All Dash data has been removed.', mbInformation, MB_OK);
-    end;
-  end
+
+  if UninstallSilent() or not DirExists(AppDataPath) then
+    Exit;
+
+  DeleteUserData := SuppressibleMsgBox(
+    'Also delete your Dash settings and commands?' + #13#10 + #13#10 +
+    'Yes: delete them, along with custom icons, usage history and logs, from:' + #13#10 +
+    AppDataPath + #13#10 + #13#10 +
+    'No: keep them, so reinstalling Dash later picks up where you left off.',
+    mbConfirmation, MB_YESNO or MB_DEFBUTTON2, IDNO) = IDYES;
+
+  if DeleteUserData then
+    Log('User chose to delete the AppData folder after uninstall')
   else
+    Log('User chose to keep the AppData folder');
+end;
+
+procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
+var
+  TempDashPath: String;
+begin
+  if CurUninstallStep <> usPostUninstall then
+    Exit;
+
+  // Installers downloaded by the in-app updater. src/updater.py saves them
+  // under tempfile.gettempdir()\Dash\updates, which is the user's %TEMP%.
+  // GetTempDir follows %TEMP% even when it has been moved, which a fixed
+  // {localappdata}\Temp entry in [UninstallDelete] would not.
+  TempDashPath := AddBackslash(GetTempDir()) + '{#MyAppName}';
+  if DirExists(TempDashPath + '\updates') then
+    DelTree(TempDashPath + '\updates', True, True, True);
+  RemoveDir(TempDashPath);
+
+  if DeleteUserData and DirExists(AppDataPath) then
   begin
-    Log('Preserved AppData folder at user request');
-    MsgBox('Your settings and commands have been preserved in:' + #13#10 + 
-           AppDataPath + #13#10 + #13#10 +
-           'You can manually delete this folder if needed.', 
-           mbInformation, MB_OK);
+    if DelTree(AppDataPath, True, True, True) then
+      Log('Deleted AppData folder at user request')
+    else
+      Log('Could not delete all of the AppData folder');
   end;
 end;
 
@@ -243,10 +276,10 @@ begin
     WizardForm.FinishedLabel.Caption := 
       'Setup has finished installing Dash on your computer.' + #13#10 + #13#10 +
       'Quick Start Guide:' + #13#10 +
-      '• Press Alt+F anywhere to open the launcher' + #13#10 +
+      '• Press Alt+Space (unless you have chosen another hotkey) to open Dash' + #13#10 +
       '• Type to search your commands instantly' + #13#10 +
-      '• Right-click the system tray icon for settings' + #13#10 +
-      '• Edit commands.toml to add your own shortcuts' + #13#10 + #13#10 +
+      '• Press Ctrl+, in Dash to open Settings' + #13#10 +
+      '• Press Ctrl+N in Dash to add a command' + #13#10 + #13#10 +
       'Your configuration files are in:' + #13#10 +
       AppDataPath + #13#10 + #13#10 +
       'Click Finish to close Setup.';
@@ -262,7 +295,7 @@ begin
     '• Open files, folders, and websites instantly' + #13#10 +
     '• Launch applications with keyboard shortcuts' + #13#10 +
     '• Perform calculations on the fly' + #13#10 +
-    '• Customize everything with simple config files' + #13#10 + #13#10 +
-    'Press Alt+F to open the launcher anytime!' + #13#10 + #13#10 +
+    '• Customize hotkeys, icons, colors and more in Settings' + #13#10 + #13#10 +
+    'Press Alt+Space to open the launcher anytime.' + #13#10 + #13#10 +
     'Click Next to continue.';
 end;

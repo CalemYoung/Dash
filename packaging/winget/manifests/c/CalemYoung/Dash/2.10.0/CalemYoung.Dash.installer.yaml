@@ -1,6 +1,6 @@
 # yaml-language-server: $schema=https://aka.ms/winget-manifest.installer.1.6.0.schema.json
 PackageIdentifier: CalemYoung.Dash
-PackageVersion: 2.8.5
+PackageVersion: 2.10.0
 InstallerType: inno
 Scope: user
 InstallModes:
@@ -12,12 +12,11 @@ ProductCode: '{88DC9BD4-16FC-452E-87DD-4B0F54603ED1}}_is1'
 AppsAndFeaturesEntries:
 - DisplayName: Dash
   Publisher: Calem Young
-  DisplayVersion: 2.8.5
+  DisplayVersion: 2.10.0
   ProductCode: '{88DC9BD4-16FC-452E-87DD-4B0F54603ED1}}_is1'
-ReleaseDate: 2026-09-10
 Installers:
 - Architecture: x64
-  InstallerUrl: https://github.com/CalemYoung/Dash/releases/download/v2.8.5/DashSetup-2.8.5.exe
-  InstallerSha256: 5980A2EF74EB117D3D0BE753E15DA28F06BD1772BC394019B5B9B70F7EB8CBD4
+  InstallerUrl: https://github.com/CalemYoung/Dash/releases/download/v2.10.0/DashSetup-2.10.0.exe
+  InstallerSha256: <SHA-256 from DashSetup-2.10.0.exe.sha256 on the release, in upper case>
 ManifestType: installer
 ManifestVersion: 1.6.0

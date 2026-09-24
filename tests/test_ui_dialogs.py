@@ -1,7 +1,9 @@
 import base64
+import shutil
 import sys
 import unittest
 from pathlib import Path
+from tempfile import TemporaryDirectory
 from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QIcon
 from PyQt6.QtWidgets import QApplication
@@ -22,10 +24,20 @@ ONE_PIXEL_PNG = base64.b64decode(
 )
 
 
+# The real config/commands.toml is ignored by git and only exists on a
+# developer's machine, so the tests work on a copy of the shipped defaults.
+DEFAULT_COMMANDS = Path(__file__).resolve().parent.parent / "config" / "commands.default.toml"
+
+
 class TestUIDialogs(unittest.TestCase):
     def setUp(self):
+        self._tmp = TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        root = Path(self._tmp.name)
+        self.commands_path = root / "commands.toml"
+        shutil.copyfile(DEFAULT_COMMANDS, self.commands_path)
         self.settings = Settings()
-        self.settings_path = Path("config/settings.toml")
+        self.settings_path = root / "settings.toml"
         self.icon_manager = IconManager(self.settings)
 
     def test_settings_editor_dirty_state(self):
@@ -49,7 +61,7 @@ class TestUIDialogs(unittest.TestCase):
         self.assertTrue(panel.save_button.isHidden())
 
     def test_command_editor_dirty_state(self):
-        cmd_manager = CommandManager(Path("config/commands.toml"), self.settings)
+        cmd_manager = CommandManager(self.commands_path, self.settings)
         cmd = {"name": "test_cmd", "location": "C:\\test.exe", "aliases": ["tc"], "type": "file"}
         panel = CommandEditorPanel(cmd, self.icon_manager, cmd_manager)
 
@@ -65,7 +77,7 @@ class TestUIDialogs(unittest.TestCase):
         self.assertFalse(panel.save_button.isHidden())
 
     def _new_command_panel(self):
-        cmd_manager = CommandManager(Path("config/commands.toml"), self.settings)
+        cmd_manager = CommandManager(self.commands_path, self.settings)
         return CommandEditorPanel(None, self.icon_manager, cmd_manager)
 
     def test_new_command_prefills_name_and_description_from_target(self):
@@ -112,7 +124,7 @@ class TestUIDialogs(unittest.TestCase):
         self.assertEqual(panel.command_description_edit_box.text(), "My own words")
 
     def test_editing_a_command_never_renames_it_from_the_target(self):
-        cmd_manager = CommandManager(Path("config/commands.toml"), self.settings)
+        cmd_manager = CommandManager(self.commands_path, self.settings)
         cmd = {"name": "test_cmd", "description": "Does things", "location": r"C:\test.exe", "aliases": [], "type": "file"}
         panel = CommandEditorPanel(cmd, self.icon_manager, cmd_manager)
         panel.command_action.command_action_edit_box.setText(r"C:\Tools\other.exe")
@@ -120,7 +132,7 @@ class TestUIDialogs(unittest.TestCase):
         self.assertEqual(panel.command_description_edit_box.text(), "Does things")
 
     def test_clearing_a_custom_icon_goes_back_to_the_commands_own(self):
-        cmd_manager = CommandManager(Path("config/commands.toml"), self.settings)
+        cmd_manager = CommandManager(self.commands_path, self.settings)
         # The editor only keeps an icon it can show, so the files have to be there.
         stored = self.icon_manager.command_icon_path("icon_reset_cmd")
         source = self.icon_manager.command_source_icon_path("icon_reset_cmd")
@@ -155,7 +167,7 @@ class TestUIDialogs(unittest.TestCase):
         self.assertFalse(panel.save_button.isHidden())
 
     def test_a_late_favicon_does_not_take_over_an_icon_of_your_own(self):
-        cmd_manager = CommandManager(Path("config/commands.toml"), self.settings)
+        cmd_manager = CommandManager(self.commands_path, self.settings)
         stored = self.icon_manager.command_icon_path("icon_keep_cmd")
         stored.write_bytes(ONE_PIXEL_PNG)
         self.addCleanup(stored.unlink, True)
@@ -230,14 +242,14 @@ class TestUIDialogs(unittest.TestCase):
         self.assertTrue(usage_summary(candidates[4]).startswith("Last opened "))
         self.assertEqual(usage_summary(candidates[1]), "")
 
-        cmd_manager = CommandManager(Path("config/commands.toml"), self.settings)
+        cmd_manager = CommandManager(self.commands_path, self.settings)
         dialog = ProgramImportDialog(candidates, set(), self.icon_manager, command_manager=cmd_manager)
         websites = dialog.lists["website"]
         items = [websites.item(i) for i in range(websites.count())]
         rows = [dialog._row_widget(item) for item in items]
         names = [item.data(Qt.ItemDataRole.UserRole)["name"] for item in items]
         self.assertEqual(names[:2], ["Opened often", "Opened once recently"])
-        self.assertTrue(rows[0].usage_label.text().startswith("Opened 30 times"))
+        self.assertTrue(rows[0].usage_label.full_text().startswith("Opened 30 times"))
         self.assertFalse(hasattr(rows[-1], "usage_label"))
 
 

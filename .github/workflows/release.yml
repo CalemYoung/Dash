@@ -25,7 +25,7 @@ jobs:
       - name: Install build dependencies
         run: |
           python -m pip install --upgrade pip
-          python -m pip install -r requirements.txt
+          python -m pip install -r requirements-dev.txt
 
       - name: Install Inno Setup
         run: choco install innosetup --no-progress --yes
@@ -75,7 +75,7 @@ jobs:
 
       - name: Publish GitHub release
         if: github.ref_type == 'tag'
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2.6.2
         with:
           generate_release_notes: true
           files: |
@@ -89,7 +89,12 @@ jobs:
   # Needs, once: a fork of microsoft/winget-pkgs under the account that owns
   # a repository secret WINGET_TOKEN (fine-grained token on that fork with
   # Contents and Pull requests read/write). Without the secret this job
-  # explains itself and exits cleanly.
+  # leaves a warning on the run and its summary rather than failing the
+  # release, which has already been published by then.
+  #
+  # winget-releaser only updates a package that is already in winget-pkgs.
+  # The first version has to be submitted by hand from the manifests in
+  # packaging/winget (see CONTRIBUTING.md).
   winget:
     needs: build-and-release
     if: github.ref_type == 'tag'
@@ -102,7 +107,9 @@ jobs:
           WINGET_TOKEN: ${{ secrets.WINGET_TOKEN }}
         run: |
           if ([string]::IsNullOrEmpty($env:WINGET_TOKEN)) {
-            Write-Host "::warning title=winget submission skipped::WINGET_TOKEN secret is not set, so $env:GITHUB_REF_NAME was not submitted to winget-pkgs."
+            $message = "WINGET_TOKEN secret is not set, so $env:GITHUB_REF_NAME was not submitted to winget-pkgs. Add the secret and re-run this job, or submit the manifests by hand."
+            Write-Host "::warning title=winget submission skipped::$message"
+            "### winget submission skipped`n`n$message" >> $env:GITHUB_STEP_SUMMARY
             "present=false" >> $env:GITHUB_OUTPUT
           } else {
             "present=true" >> $env:GITHUB_OUTPUT
@@ -110,7 +117,7 @@ jobs:
 
       - name: Submit manifest update to winget-pkgs
         if: steps.token.outputs.present == 'true'
-        uses: vedantmgoyal9/winget-releaser@v2
+        uses: vedantmgoyal9/winget-releaser@4ffc7888bffd451b357355dc214d43bb9f23917e # v2
         with:
           identifier: CalemYoung.Dash
           installers-regex: 'DashSetup-.*\.exe$'

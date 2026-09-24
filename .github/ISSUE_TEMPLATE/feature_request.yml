@@ -1,0 +1,26 @@
+name: Feature request
+description: Suggest an idea or an improvement for Dash.
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Dash is deliberately small: it opens the commands you gave it, predictably. Ideas that keep it fast and predictable are the most likely to be taken up.
+  - type: textarea
+    id: problem
+    attributes:
+      label: What are you trying to do?
+      description: The problem or the situation, rather than the solution. "I often want to..." is a good start.
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: What would you like Dash to do?
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Anything you have tried instead
+      description: Workarounds, settings, or how another launcher handles it.

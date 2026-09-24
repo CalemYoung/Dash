@@ -1,7 +1,7 @@
+# What Dash needs to run. Build and test tools are in requirements-dev.txt.
 Pillow>=10,<12
-PyInstaller>=6,<7
 PyQt6>=6.7,<7
 PyHotKey>=1.5,<2
 pyperclip>=1.8,<2
 pytablericons>=1,<2
-pywin32>=306
+pywin32>=306,<313

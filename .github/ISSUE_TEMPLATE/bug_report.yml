@@ -1,0 +1,62 @@
+name: Bug report
+description: Something in Dash does not work as it should.
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to report this. For a security problem, please do not use this form: see the security policy instead.
+  - type: input
+    id: dash-version
+    attributes:
+      label: Dash version
+      description: Shown under About in the tray menu, for example 2.10.0.
+    validations:
+      required: true
+  - type: input
+    id: windows-version
+    attributes:
+      label: Windows version
+      description: Press Win+R, run `winver`, and copy the version and build, for example "Windows 11 24H2 (build 26100.2033)".
+    validations:
+      required: true
+  - type: dropdown
+    id: install-method
+    attributes:
+      label: How did you install Dash?
+      options:
+        - Installer from GitHub Releases
+        - winget
+        - Running from source
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      description: What you did, one step per line.
+      placeholder: |
+        1. Press Alt+Space
+        2. Type "gh dash"
+        3. Press Enter
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: What you expected to happen
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: What happened instead
+      description: Include the text of any error message. Screenshots help too.
+    validations:
+      required: true
+  - type: textarea
+    id: log
+    attributes:
+      label: Log file
+      description: |
+        Please attach `%APPDATA%\Dash\logs\dash.log` (paste the path into File Explorer's address bar to find it). Drag the file into this box to attach it. The log can contain the names and locations of your commands, so look through it first if that matters to you.
