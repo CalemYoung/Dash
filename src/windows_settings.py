@@ -18,7 +18,8 @@ SETTINGS_ICON_COLOR = "#f3f4f7"
 SETTINGS_ICON_BACKGROUND = "#3a4a66"
 
 # (name, page, aliases, glyph). Most commonly opened first; the dialog keeps
-# this order. Names avoid those of Store apps ("Camera", "Windows Security")
+# this order. Names are Windows' own US English ones; a British spelling is
+# kept as an alias. Names avoid those of Store apps ("Camera", "Windows Security")
 # so a page and an app never compete for the same name.
 SETTINGS_PAGES: tuple[tuple[str, str, tuple[str, ...], str], ...] = (
     ("Windows Settings", "", (), "SETTINGS"),
@@ -45,9 +46,9 @@ SETTINGS_PAGES: tuple[tuple[str, str, tuple[str, ...], str], ...] = (
     ("Proxy", "network-proxy", (), "WORLD"),
     ("Ethernet", "network-ethernet", (), "PLUG_CONNECTED"),
     ("Mobile hotspot", "network-mobilehotspot", ("hotspot",), "ACCESS_POINT"),
-    ("Personalisation", "personalization", ("personalization",), "PALETTE"),
+    ("Personalization", "personalization", ("personalisation",), "PALETTE"),
     ("Background", "personalization-background", ("wallpaper",), "PHOTO"),
-    ("Colours", "colors", ("colors", "dark mode"), "BRIGHTNESS_HALF"),
+    ("Colors", "colors", ("colours", "dark mode"), "BRIGHTNESS_HALF"),
     ("Themes", "themes", (), "SUN_MOON"),
     ("Lock screen", "lockscreen", (), "LOCK"),
     ("Taskbar", "taskbar", (), "LAYOUT_BOTTOMBAR"),

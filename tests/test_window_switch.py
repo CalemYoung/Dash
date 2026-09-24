@@ -91,5 +91,24 @@ class LaunchTests(unittest.TestCase):
         startfile.assert_called_once()
 
 
+
+class VersionFolderTests(unittest.TestCase):
+    def test_any_version_of_a_squirrel_app_matches(self):
+        stored = os.path.join("C:", os.sep, "Users", "me", "AppData", "Local", "Discord", "app-1.0.9", "Discord.exe")
+        running = stored.replace("app-1.0.9", "app-1.0.12")
+        kind, wanted = window_switch._target_key(stored)
+        with (
+            mock.patch.object(window_switch, "top_level_windows", return_value=[(10, 1)]),
+            mock.patch.object(window_switch, "process_image", return_value=os.path.normcase(os.path.abspath(running))),
+            mock.patch.object(window_switch, "process_app_id", return_value=None),
+        ):
+            self.assertEqual(window_switch.find_window((kind, wanted)), 10)
+        self.assertEqual(
+            window_switch._without_version_folder(os.path.normcase(r"c:\tools\app-data\tool.exe")),
+            os.path.normcase(r"c:\tools\app-data\tool.exe"),
+            "only app-<version> folders",
+        )
+
+
 if __name__ == "__main__":
     unittest.main()

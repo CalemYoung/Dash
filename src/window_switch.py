@@ -8,6 +8,7 @@ suspended Store apps and of other virtual desktops).
 """
 import ctypes
 import os
+import re
 import sys
 from ctypes import wintypes
 from pathlib import Path
@@ -24,7 +25,11 @@ _SW_RESTORE = 9
 
 def switch_to_running(location: str) -> bool:
     """Focus the front-most window of the program `location` starts.
-    True if a window was found and brought forward; False to launch as usual."""
+    True if a window was found and brought forward; False to launch as usual.
+
+    For a shortcut that passes arguments, pass the program it runs (the
+    command's "process_path"), not the shortcut: a .lnk is never matched.
+    """
     target = _target_key(location)
     if target is None:
         return False
@@ -39,8 +44,17 @@ def _target_key(location: str) -> tuple[str, str] | None:
     if is_app_id_location(text):
         return "app", text.split("\\", 1)[1].casefold()
     if Path(text).suffix.casefold() == ".exe":
-        return "exe", os.path.normcase(os.path.abspath(text))
+        return "exe", _without_version_folder(os.path.normcase(os.path.abspath(text)))
     return None
+
+
+# Squirrel installs (Discord, Slack) keep the exe in "app-<version>", a new
+# folder on every update, so a stored path goes stale; any version matches.
+_VERSION_FOLDER = re.compile(r"([\\/])app-[0-9][^\\/]*([\\/][^\\/]+)$", re.IGNORECASE)
+
+
+def _without_version_folder(path_key: str) -> str:
+    return _VERSION_FOLDER.sub(r"\1app-*\2", path_key)
 
 
 def find_window(target: tuple[str, str]) -> int | None:
@@ -52,7 +66,11 @@ def find_window(target: tuple[str, str]) -> int | None:
         if pid == own_pid:
             continue
         if pid not in seen:
-            seen[pid] = process_app_id(pid) if kind == "app" else process_image(pid)
+            if kind == "app":
+                seen[pid] = process_app_id(pid)
+            else:
+                image = process_image(pid)
+                seen[pid] = _without_version_folder(image) if image else None
         if seen[pid] is not None and seen[pid] == wanted:
             return hwnd
     return None

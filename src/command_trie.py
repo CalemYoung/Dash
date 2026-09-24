@@ -1,5 +1,6 @@
+from bisect import bisect_left
 from dataclasses import dataclass
-from typing import Optional
+from typing import Iterable, Optional
 
 
 @dataclass(frozen=True)
@@ -56,8 +57,9 @@ class CommandTrie:
         node.is_end = True
         node.command_id = command_id
 
-    def search_prefix(self, prefix: str, max_results: int = 10) -> list[str]:
-        """Search for keywords matching prefix, return unique command IDs"""
+    def search_prefix(self, prefix: str, max_results: Optional[int] = 10) -> list[str]:
+        """Search for keywords matching prefix, return unique command IDs.
+        `max_results` None returns every match."""
         node = self.root
 
         for char in self.normalize(prefix):
@@ -205,9 +207,9 @@ class CommandTrie:
             command_ids.update(self._command_ids(child))
         return command_ids
 
-    def _collect_command_ids(self, node: TrieNode, command_ids: list[str], seen: set[str], max_results: int):
+    def _collect_command_ids(self, node: TrieNode, command_ids: list[str], seen: set[str], max_results: Optional[int]):
         """Recursively collect command IDs, skipping duplicates"""
-        if len(command_ids) >= max_results:
+        if max_results is not None and len(command_ids) >= max_results:
             return
 
         if node.is_end and node.command_id:
@@ -215,10 +217,70 @@ class CommandTrie:
                 seen.add(node.command_id)
                 command_ids.append(node.command_id)
 
-        if len(command_ids) >= max_results:
+        if max_results is not None and len(command_ids) >= max_results:
             return
 
         for child in node.children.values():
             self._collect_command_ids(child, command_ids, seen, max_results)
-            if len(command_ids) >= max_results:
+            if max_results is not None and len(command_ids) >= max_results:
                 break
+
+
+def word_start_offsets(text: str) -> list[int]:
+    """Where each word after the first begins in `text`: after a space,
+    hyphen, dot, underscore or other separator, and at a capital that follows
+    a lowercase letter ("OneNote", "PowerShell")."""
+    offsets = []
+    for index in range(1, len(text)):
+        previous, character = text[index - 1], text[index]
+        if not character.isalnum():
+            continue
+        if not previous.isalnum() or (character.isupper() and previous.islower()):
+            offsets.append(index)
+    return offsets
+
+
+class WordStartIndex:
+    """Commands by the start of any later word in their name, so "code"
+    finds "Visual Studio Code" and "studio c" finds it too.
+
+    Each word start is kept with the rest of the name after it, sorted, and a
+    prefix is found by binary search. Several commands can share a word
+    ("Adobe Reader", "Foxit Reader"), which the command trie's one command
+    per keyword could not hold.
+    """
+
+    def __init__(self, case_sensitive: bool = False):
+        self.case_sensitive = case_sensitive
+        self._keys: list[str] = []
+        self._command_ids: list[str] = []
+
+    def normalize(self, text: str) -> str:
+        return text if self.case_sensitive else text.lower()
+
+    def build(self, entries: Iterable[tuple[str, str]]) -> None:
+        """Index (name, command id) pairs, replacing what was there."""
+        pairs = sorted(
+            (self.normalize(text[offset:]), command_id)
+            for text, command_id in entries
+            for offset in word_start_offsets(text)
+        )
+        self._keys = [key for key, _command_id in pairs]
+        self._command_ids = [command_id for _key, command_id in pairs]
+
+    def search_prefix(self, prefix: str) -> list[str]:
+        """Unique command IDs with a later word starting with `prefix`, in the
+        index's own order (callers sort)."""
+        wanted = self.normalize(prefix)
+        if not wanted:
+            return []
+        found: list[str] = []
+        seen: set[str] = set()
+        index = bisect_left(self._keys, wanted)
+        while index < len(self._keys) and self._keys[index].startswith(wanted):
+            command_id = self._command_ids[index]
+            if command_id not in seen:
+                seen.add(command_id)
+                found.append(command_id)
+            index += 1
+        return found

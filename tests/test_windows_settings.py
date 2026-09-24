@@ -55,6 +55,14 @@ class SettingsPageDiscoveryTests(unittest.TestCase):
         self.assertEqual(windows_settings.settings_page_name("ms-settings:privacy-contacts"), "Privacy contacts")
         self.assertEqual(windows_settings.settings_page_name("ms-settings:"), "Windows Settings")
 
+    def test_page_names_use_us_spelling_with_british_aliases(self):
+        pages = {name: aliases for name, _page, aliases, _glyph in windows_settings.SETTINGS_PAGES}
+        self.assertEqual(windows_settings.settings_page_name("ms-settings:personalization"), "Personalization")
+        self.assertEqual(windows_settings.settings_page_name("ms-settings:colors"), "Colors")
+        self.assertIn("personalisation", pages["Personalization"])
+        self.assertIn("colours", pages["Colors"])
+        self.assertFalse([name for name in pages if "colour" in name.casefold() or "isation" in name.casefold()])
+
 
 class LinkLocationTests(unittest.TestCase):
     def test_links_and_paths_are_told_apart(self):

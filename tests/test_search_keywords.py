@@ -121,5 +121,22 @@ class WebSearchSettingTests(unittest.TestCase):
         self.assertTrue(loaded.general.web_search_enabled)
 
 
+
+class BrowserCacheTests(unittest.TestCase):
+    def test_the_registry_is_read_once_until_refreshed(self):
+        from src import browsers
+
+        chrome = browsers.Browser("Chrome", "Google Chrome", "chrome.exe")
+        with mock.patch.object(browsers, "_read_installed_browsers", return_value=[chrome]) as read:
+            browsers.refresh_installed_browsers()
+            self.assertEqual(browsers.find_browser("Chrome"), chrome)
+            self.assertIsNone(browsers.find_browser("Firefox"))
+            browsers.installed_browsers()
+            self.assertEqual(read.call_count, 1)
+            browsers.refresh_installed_browsers()
+            self.assertEqual(read.call_count, 2)
+        browsers.refresh_installed_browsers()
+
+
 if __name__ == "__main__":
     unittest.main()

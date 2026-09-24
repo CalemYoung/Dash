@@ -29,7 +29,7 @@ class InstalledProgramDiscoveryTests(unittest.TestCase):
             with (
                 mock.patch.object(installed_programs.sys, "platform", "win32"),
                 mock.patch.object(installed_programs, "_start_menu_shortcuts", return_value=[shortcut]),
-                mock.patch.object(installed_programs, "_shortcut_target", return_value=word),
+                mock.patch.object(installed_programs, "_shortcut_details", return_value=(word, "")),
                 mock.patch.object(installed_programs, "_app_paths_registry_targets", return_value=[("OUTLOOK.EXE", outlook)]),
             ):
                 commands = installed_programs.discover_recent_program_commands()
@@ -222,6 +222,116 @@ class PackagedAppTests(unittest.TestCase):
             commands, set(), set(), "Teams", Path(r"C:\Program Files\WindowsApps\MSTeams_1.0_x64__8wekyb3d8bbwe\ms-teams.exe")
         )
         self.assertEqual(commands, [])
+
+
+
+class AliasSuggestionTests(unittest.TestCase):
+    def test_initials_and_the_name_without_its_vendor(self):
+        installed_programs = load_installed_programs_module()
+        suggest = installed_programs.suggest_aliases
+        self.assertEqual(suggest("Visual Studio Code"), ["vsc"])
+        self.assertEqual(suggest("Microsoft Word"), ["mw", "word"])
+        self.assertEqual(suggest("Google Chrome"), ["gc", "chrome"])
+        self.assertEqual(suggest("Mozilla Firefox"), ["mf", "firefox"])
+        self.assertEqual(suggest("Microsoft Teams (work or school)"), ["mt", "teams"])
+        self.assertEqual(suggest("Spotify"), [])
+        self.assertEqual(suggest("Python 3.12 (64-bit)"), [], "one letter is not an alias")
+        self.assertEqual(suggest("VS"), [])
+
+    def test_scanned_programs_get_the_suggestions(self):
+        installed_programs = load_installed_programs_module()
+        with TemporaryDirectory() as tmp_dir:
+            exe = Path(tmp_dir) / "code.exe"
+            exe.touch()
+            commands: list = []
+            installed_programs._add_program_command(commands, set(), set(), "Visual Studio Code", exe)
+        self.assertEqual(commands[0]["aliases"], ["vsc"])
+
+    def test_clashing_suggestions_are_dropped_not_the_candidates(self):
+        installed_programs = load_installed_programs_module()
+        candidates = [
+            {"name": "Google Chrome", "aliases": ["gc", "chrome"]},
+            {"name": "Git Cmd", "aliases": ["gc"]},
+            {"name": "Chrome", "aliases": []},
+            {"name": "Microsoft Word", "aliases": ["mw", "word", "notes"]},
+        ]
+        kept = installed_programs.drop_known_names(candidates, {"notes", "existing"})
+        self.assertEqual(
+            [(candidate["name"], candidate["aliases"]) for candidate in kept],
+            [("Google Chrome", ["gc"]), ("Git Cmd", []), ("Chrome", []), ("Microsoft Word", ["mw", "word"])],
+        )
+
+    def test_the_command_manager_drops_them_on_import_too(self):
+        from src.command_manager import CommandManager
+        from src.settings import Settings
+
+        with TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir)
+            (root / "commands.toml").write_text("[[command]]\nname = 'Chat'\naliases = ['gc']\nlocation = 'https://chat.example.com/'\ntype = 'url'\n", encoding="utf-8")
+            manager = CommandManager(root / "commands.toml", Settings())
+            first, second = root / "chrome.exe", root / "git.exe"
+            first.touch()
+            second.touch()
+            candidates = [
+                {"name": "Google Chrome", "aliases": ["gc", "chrome"], "location": str(first), "type": "file"},
+                {"name": "Git Chrome", "aliases": ["chrome"], "location": str(second), "type": "file"},
+            ]
+            self.assertEqual(
+                [candidate["aliases"] for candidate in manager.drop_clashing_aliases(candidates)],
+                [["chrome"], []],
+            )
+            summary = manager.import_program_commands(candidates)
+            self.assertEqual(summary["imported"], ["Google Chrome", "Git Chrome"])
+            self.assertEqual(summary["dropped_aliases"], {"Google Chrome": ["gc"], "Git Chrome": ["chrome"]})
+            self.assertEqual(manager.commands["Google Chrome"]["aliases"], ["chrome"])
+
+
+class ShortcutArgumentTests(unittest.TestCase):
+    def _shortcut(self, target: str, arguments: str):
+        shell = mock.MagicMock()
+        shell.CreateShortcut.return_value.TargetPath = target
+        shell.CreateShortcut.return_value.Arguments = arguments
+        return shell
+
+    def test_a_shortcut_with_arguments_is_kept_as_the_shortcut(self):
+        installed_programs = load_installed_programs_module()
+        with TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir)
+            update = root / "Discord" / "Update.exe"
+            for folder in ("app-1.0.9", "app-1.0.10"):
+                (root / "Discord" / folder).mkdir(parents=True)
+                (root / "Discord" / folder / "Discord.exe").touch()
+            update.touch()
+            shortcut = root / "Discord.lnk"
+            shell = self._shortcut(str(update), "--processStart Discord.exe")
+            target, arguments = installed_programs._shortcut_details(shortcut, shell)
+            self.assertEqual((target, arguments), (update, "--processStart Discord.exe"))
+
+            commands: list = []
+            installed_programs._add_program_command(
+                commands, set(), set(), "Discord", target, shortcut_path=shortcut, shortcut_arguments=arguments
+            )
+        self.assertEqual(commands[0]["location"], str(shortcut))
+        self.assertEqual(commands[0]["process_path"], str(root / "Discord" / "app-1.0.10" / "Discord.exe"))
+
+    def test_profiles_of_one_browser_are_not_merged(self):
+        installed_programs = load_installed_programs_module()
+        with TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir)
+            chrome = root / "chrome.exe"
+            chrome.touch()
+            commands: list = []
+            seen_locations: set = set()
+            seen_names: set = set()
+            for name, profile in (("Chrome - Work", "Profile 1"), ("Chrome - Home", "Default")):
+                installed_programs._add_program_command(
+                    commands, seen_locations, seen_names, name, chrome,
+                    shortcut_path=root / f"{name}.lnk", shortcut_arguments=f'--profile-directory="{profile}"',
+                )
+            installed_programs._add_program_command(commands, seen_locations, seen_names, "Google Chrome", chrome, shortcut_path=root / "Google Chrome.lnk")
+        self.assertEqual([command["name"] for command in commands], ["Chrome - Work", "Chrome - Home", "Google Chrome"])
+        self.assertEqual([command.get("process_path") for command in commands], [str(chrome), str(chrome), None])
+        self.assertEqual(commands[2]["location"], str(chrome))
 
 
 if __name__ == "__main__":

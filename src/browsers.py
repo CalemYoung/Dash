@@ -39,8 +39,29 @@ def _split_command(command: str) -> str:
         return text.split(" ", 1)[0]
 
 
-def installed_browsers() -> list[Browser]:
-    """Browsers registered with Windows whose executable exists, in registry order."""
+# The registry scan is kept until refresh_installed_browsers(), so opening a
+# URL does not read the registry and check every browser's exe each time.
+_browser_cache: list[Browser] | None = None
+
+
+def installed_browsers(refresh: bool = False) -> list[Browser]:
+    """Browsers registered with Windows whose executable exists, in registry order.
+
+    Read once and remembered; pass `refresh` (or call
+    refresh_installed_browsers) to pick up a browser installed since.
+    """
+    global _browser_cache
+    if _browser_cache is None or refresh:
+        _browser_cache = _read_installed_browsers()
+    return list(_browser_cache)
+
+
+def refresh_installed_browsers() -> list[Browser]:
+    """Read the registry again, e.g. when Settings or the editor opens."""
+    return installed_browsers(refresh=True)
+
+
+def _read_installed_browsers() -> list[Browser]:
     if sys.platform != "win32":
         return []
     import winreg
@@ -95,8 +116,12 @@ def open_url(url: str, browser_key: str | None = None) -> None:
     """
     browser = find_browser(browser_key)
     if browser is not None:
-        subprocess.Popen([browser.executable, url], close_fds=True)
-        return
+        try:
+            subprocess.Popen([browser.executable, url], close_fds=True)
+            return
+        except OSError:
+            # Uninstalled since the list was read: read it again next time.
+            refresh_installed_browsers()
     if not webbrowser.open(url):
         raise OSError(f"No web browser could be opened for {url}")
 

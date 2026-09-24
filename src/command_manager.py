@@ -1,6 +1,9 @@
 import base64
 import json
+import logging
+import ntpath
 import os
+import subprocess
 import tomllib
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -8,9 +11,17 @@ from urllib.parse import urlparse
 
 from .browsers import fill_query, is_search_link
 from .browsers import open_url as open_in_browser
-from .command_trie import CommandTrie
+from .command_trie import CommandTrie, WordStartIndex
+from .fileio import atomic_write_text, quarantine_file
 from .icon_manager import command_source_icon_path
-from .installed_programs import _path_key, is_link_location
+from .installed_programs import (
+    SAFE_LINK_SCHEMES,
+    _path_key,
+    drop_clashing_aliases,
+    is_link_location,
+    is_network_location,
+    link_scheme,
+)
 from .window_switch import switch_to_running
 from .settings import Settings, toml_str, toml_value
 
@@ -18,7 +29,43 @@ if TYPE_CHECKING:  # pragma: no cover - type hints only, keeps the GUI out of th
     from .launcher_gui import MainWindow
 
 
+logger = logging.getLogger(__name__)
+
 RUN_COUNTS_FILENAME = "run_counts.json"
+
+# The command types a commands file may hold; "system" ones are built in.
+COMMAND_TYPES = ("file", "url", "group")
+
+# Optional launch settings of an app or file command:
+#   arguments       passed to the program ("--new-window C:\\Projects")
+#   working_folder  the folder it starts in, instead of its own
+#   process_path    the program a shortcut ends up running, for switching to
+#                   its window and for its icon (the shortcut is the location)
+LAUNCH_KEYS = ("arguments", "working_folder", "process_path")
+
+# Programs that run whatever their arguments say. A shared commands file that
+# hands them arguments is a script in disguise, so such commands are refused
+# on import; a person can still make one in the editor.
+SCRIPT_HOSTS = frozenset(
+    {
+        "cmd.exe",
+        "powershell.exe",
+        "pwsh.exe",
+        "wscript.exe",
+        "cscript.exe",
+        "mshta.exe",
+        "rundll32.exe",
+        "regsvr32.exe",
+        "wsl.exe",
+        "bash.exe",
+        "msiexec.exe",
+        "certutil.exe",
+        "bitsadmin.exe",
+    }
+)
+
+# ShellExecute's answer when the person says No to the administrator prompt.
+_ERROR_CANCELLED = 1223
 
 # What made a command's icon (see icon_browser recipes). Stored next to the
 # rendered `icon` path so the icon can be re-edited exactly and exported.
@@ -45,10 +92,36 @@ def _serialize_command(cmd: dict) -> str:
         lines.append(f"icon = {toml_str(cmd['icon'])}")
     if cmd.get("browser"):
         lines.append(f"browser = {toml_str(cmd['browser'])}")
+    for key in LAUNCH_KEYS:
+        if cmd.get(key):
+            lines.append(f"{key} = {toml_str(cmd[key])}")
     for key in (*ICON_RECIPE_KEYS, ICON_SOURCE_DATA_KEY):
         if cmd.get(key):
             lines.append(f"{key} = {toml_str(cmd[key])}")
     return "\n".join(lines) + "\n"
+
+
+def _entry_problem(entry) -> str | None:
+    """Why a [[command]] entry cannot be loaded, in plain words, or None."""
+    if not isinstance(entry, dict):
+        return "it is not a command"
+    name = entry.get("name")
+    if not isinstance(name, str) or not name.strip():
+        return "it has no name"
+    for key in ("location", "description", "type", "icon", "browser", *ICON_RECIPE_KEYS, *LAUNCH_KEYS):
+        if entry.get(key) is not None and not isinstance(entry[key], str):
+            return f"its {key.replace('_', ' ')} is not text"
+    for key in ("aliases", "targets"):
+        value = entry.get(key)
+        if value is not None and not (isinstance(value, list) and all(isinstance(item, str) for item in value)):
+            return f"its {key} are not a list of text"
+    if entry.get("type") and entry["type"] not in COMMAND_TYPES:
+        return f"its type '{entry['type']}' is not one Dash knows"
+    return None
+
+
+def _launch_fields(command: dict) -> dict:
+    return {key: str(command[key]).strip() for key in LAUNCH_KEYS if str(command.get(key) or "").strip()}
 
 
 def _safe_run_count(value) -> int:
@@ -58,14 +131,27 @@ def _safe_run_count(value) -> int:
         return 0
 
 
+class CommandsFileUnreadableError(OSError):
+    """Saving was refused because commands.toml could not be read or set aside."""
+
+
 class CommandManager:
     def __init__(self, command_file_path: Path, settings: Settings):
         self.command_file_path = command_file_path
         self.settings = settings
         self.commands = {}
         self.lookup_trie = CommandTrie()
+        # Commands by the start of any later word of their name ("code" for
+        # Visual Studio Code), for the match_word_starts setting.
+        self.word_index = WordStartIndex()
         # Every name and alias, as the trie compares them, to its command.
         self.keyword_index: dict[str, str] = {}
+        # Plain-language notes about problems met while loading commands.toml
+        # (an unreadable file set aside, entries or aliases left out) for the
+        # GUI to show. Nothing here stops Dash starting; the GUI clears the
+        # list once it has shown it.
+        self.load_warnings: list[str] = []
+        self._kept_original = False
         # Run counts live beside the commands file rather than in it, so that
         # launching a command never rewrites the user's command definitions.
         self.run_counts_path = command_file_path.parent / RUN_COUNTS_FILENAME
@@ -91,7 +177,11 @@ class CommandManager:
         if self.run_counts_path.exists():
             try:
                 data = json.loads(self.run_counts_path.read_text(encoding="utf-8"))
-            except (OSError, ValueError):
+            except ValueError:
+                logger.warning("Run counts file is unreadable; set aside as %s", quarantine_file(self.run_counts_path))
+                data = {}
+            except OSError as error:
+                logger.warning("Could not read run counts: %s", error)
                 data = {}
             if isinstance(data, dict):
                 return {str(name): _safe_run_count(count) for name, count in data.items()}
@@ -111,10 +201,9 @@ class CommandManager:
     def _save_run_counts(self, counts: dict[str, int] | None = None):
         counts = self.run_counts if counts is None else counts
         try:
-            self.run_counts_path.parent.mkdir(parents=True, exist_ok=True)
-            self.run_counts_path.write_text(json.dumps(counts, indent=2, sort_keys=True), encoding="utf-8")
+            atomic_write_text(self.run_counts_path, json.dumps(counts, indent=2, sort_keys=True))
         except OSError as error:
-            print(f"Could not save run counts: {error}")
+            logger.warning("Could not save run counts: %s", error)
 
     def increment_run_count(self, name: str) -> int:
         """Increment a command's execution count and return the new value."""
@@ -149,21 +238,100 @@ class CommandManager:
 
     # --------------------------------------------------------------- loading
 
-    def _load_commands_from_file(self):
-        with self.command_file_path.open("rb") as f:
-            cfg = tomllib.load(f)
+    def _warn(self, message: str) -> None:
+        """Log a loading problem and keep it for the GUI, once."""
+        logger.warning(message)
+        if message not in self.load_warnings:
+            self.load_warnings.append(message)
 
-        commands_list = cfg.get("command", [])
-        commands = {}
-        keyword_to_command = {}
-        conflicts = []
+    def _read_command_file(self, report: bool = False) -> list[dict]:
+        """The well-formed [[command]] entries of commands.toml.
 
-        # Add system commands first
+        A file that is not valid TOML is moved aside (see quarantine_file)
+        and Dash carries on without it, so one bad edit never stops it
+        starting. Entries that cannot be loaded (no name, a list where text
+        belongs) are left out; the file as it was is kept beside it before
+        anything is written back without them. With `report` the entries left
+        out are noted in load_warnings.
+        """
+        path = self.command_file_path
+        try:
+            if not path.exists():
+                return []
+            with path.open("rb") as f:
+                cfg = tomllib.load(f)
+        except ValueError as error:  # TOMLDecodeError, or text that is not UTF-8
+            logger.error("Commands file %s is unreadable: %s", path, error)
+            moved = quarantine_file(path)
+            if moved is not None:
+                self._warn(
+                    f"Your commands file could not be read, so Dash started without your commands. "
+                    f"The file was kept as {moved.name} in {moved.parent}. Details: {error}"
+                )
+            else:
+                # Still in place: never save over it, or the commands in it are lost.
+                self._unreadable_file = True
+                self._warn(f"Your commands file could not be read, so Dash started without your commands. Details: {error}")
+            return []
+        except OSError as error:
+            self._unreadable_file = True
+            self._warn(f"Your commands file could not be opened, so Dash started without your commands. Details: {error}")
+            return []
+
+        entries = cfg.get("command", [])
+        if not isinstance(entries, list):
+            entries = [entries]
+        kept: list[dict] = []
+        problems: list[str] = []
+        for position, entry in enumerate(entries, start=1):
+            problem = _entry_problem(entry)
+            if problem is None:
+                kept.append(entry)
+                continue
+            name = entry.get("name") if isinstance(entry, dict) else None
+            label = f"'{name}'" if isinstance(name, str) and name.strip() else f"Command {position}"
+            problems.append(f"{label}: {problem}")
+
+        if problems:
+            if not self._kept_original:
+                self._kept_original = True
+                self._keep_original_copy()
+            if report:
+                count = len(problems)
+                noun = "command" if count == 1 else "commands"
+                self._warn(f"Left out {count} {noun} that could not be read from {path.name}: " + "; ".join(problems) + ".")
+        return kept
+
+    def _keep_original_copy(self) -> None:
+        """Copy commands.toml aside before a save drops entries it could not load."""
+        path = self.command_file_path
+        target = path.with_name(path.name + ".bad")
+        counter = 1
+        while target.exists():
+            target = path.with_name(f"{path.name}.bad{counter}")
+            counter += 1
+        try:
+            atomic_write_text(target, path.read_text(encoding="utf-8"))
+        except OSError as error:
+            logger.warning("Could not keep a copy of %s: %s", path, error)
+
+    def _load_commands_from_file(self) -> tuple[dict, dict[str, str]]:
+        """(commands by name, keyword to command name) from commands.toml.
+
+        Names are claimed before aliases, so a command's own name always
+        beats another's alias. A later command with a name already taken is
+        left out, and an alias that is already some command's name or alias
+        is dropped from the later command; either way a note goes into
+        load_warnings rather than stopping the load.
+        """
+        commands: dict[str, dict] = {}
+        keyword_to_command: dict[str, str] = {}
+        owners: dict[str, str] = {}  # casefolded keyword -> command name
+        pending_aliases: list[tuple[dict, list[str], bool]] = []
+
         for cmd_data in self._get_system_commands():
             name = cmd_data["name"]
-            aliases = cmd_data.get("aliases", [])
-
-            command_obj = {
+            commands[name] = {
                 "name": name,
                 "description": cmd_data.get("description", ""),
                 "icon": cmd_data.get("icon"),  # Don't set default here
@@ -171,18 +339,16 @@ class CommandManager:
                 "action": cmd_data.get("action"),
                 "times_executed": 0,
             }
+            owners[name.casefold()] = name
+            keyword_to_command[name] = name
+            pending_aliases.append((commands[name], list(cmd_data.get("aliases", [])), False))
 
-            commands[name] = command_obj
-
-            all_keywords = [name, *aliases]
-            for keyword in all_keywords:
-                keyword_to_command[keyword] = name
-
-        # Add user commands from file
-        for cmd_data in commands_list:
-            name = cmd_data.get("name")
-            aliases = cmd_data.get("aliases", [])
-            location = cmd_data.get("location", "")
+        for cmd_data in self._read_command_file(report=True):
+            name = cmd_data["name"]
+            if name.strip().casefold() in owners:
+                self._warn(f"Left out a second command named '{name}': another command already has this name.")
+                continue
+            location = cmd_data.get("location") or ""
 
             # Auto-detect type
             cmd_type = cmd_data.get("type")
@@ -191,35 +357,46 @@ class CommandManager:
 
             command_obj = {
                 "name": name,
-                "description": cmd_data.get("description", ""),
-                "aliases": list(aliases),
+                "description": cmd_data.get("description") or "",
+                "aliases": [],
                 "icon": cmd_data.get("icon"),  # Don't set default here - let icon_manager handle it
                 "type": cmd_type,
                 "location": location,
                 "times_executed": self.run_counts.get(str(name), 0),
                 "_path": Path(location).expanduser() if cmd_type == "file" and location else None,
                 "browser": str(cmd_data.get("browser") or "") or None,
-                "targets": [str(target) for target in cmd_data.get("targets", [])] if cmd_type == "group" else [],
+                "targets": list(cmd_data.get("targets") or []) if cmd_type == "group" else [],
+                **(_launch_fields(cmd_data) if cmd_type == "file" else {}),
                 **_recipe_fields(cmd_data),
             }
-
             commands[name] = command_obj
+            owners[name.strip().casefold()] = name
+            keyword_to_command[name] = name
+            pending_aliases.append((command_obj, list(cmd_data.get("aliases") or []), True))
 
-            all_keywords = [name, *aliases]
-            for keyword in all_keywords:
-                if keyword in keyword_to_command:
-                    conflicts.append((keyword, keyword_to_command[keyword], name))
-                keyword_to_command[keyword] = name
+        for command_obj, aliases, is_user in pending_aliases:
+            name = command_obj["name"]
+            kept = []
+            for alias in aliases:
+                key = alias.strip().casefold()
+                owner = owners.get(key)
+                if not key or owner == name:
+                    continue  # empty, or a repeat of its own name or alias
+                if owner is not None:
+                    if is_user:
+                        self._warn(f"The alias '{alias}' of '{name}' was ignored because '{owner}' already uses it.")
+                    continue
+                owners[key] = name
+                keyword_to_command[alias] = name
+                kept.append(alias)
+            if is_user:
+                command_obj["aliases"] = kept
 
-        return commands, keyword_to_command, conflicts
+        return commands, keyword_to_command
 
     def _read_raw_commands(self):
         """Return the user command list from the file (system commands excluded)."""
-        if not self.command_file_path.exists():
-            return []
-        with self.command_file_path.open("rb") as f:
-            cfg = tomllib.load(f)
-        return cfg.get("command", [])
+        return self._read_command_file()
 
     @staticmethod
     def _command_locations(commands: list[dict]) -> set[str]:
@@ -252,6 +429,39 @@ class CommandManager:
                 return "Choose an existing folder."
             if command.get("command_type") == "app" and not path.is_file():
                 return "Choose an existing file."
+        working_folder = str(command.get("working_folder") or "").strip()
+        if working_folder and command_type == "file" and not Path(working_folder).expanduser().is_dir():
+            return "Choose a working folder that exists, or leave it empty."
+        return None
+
+    @staticmethod
+    def import_problem(candidate: dict) -> str | None:
+        """Why a command from a shared commands file is refused, or None.
+
+        Checked on the text alone, before anything looks at the disk: asking
+        Windows whether \\\\server\\share exists already connects to that
+        server with the user's sign-in. Only commands arriving from a file
+        are held to this; one made in the editor goes where its maker chose.
+        """
+        cmd_type = candidate.get("type") or "file"
+        if cmd_type not in COMMAND_TYPES:
+            return f"Dash has no '{cmd_type}' commands, so this one can't be imported."
+        if cmd_type == "group":
+            return None
+        location = str(candidate.get("location", "")).strip()
+        for value in (location, *(str(candidate.get(key) or "") for key in LAUNCH_KEYS if key != "arguments")):
+            if is_network_location(value):
+                return "Commands that open a network location (\\\\server\\share) are not imported. Add it yourself if you trust it."
+        scheme = link_scheme(location)
+        if cmd_type == "url":
+            if scheme not in ("http", "https"):
+                return "Only http and https website addresses can be imported."
+            return None
+        if scheme and scheme not in SAFE_LINK_SCHEMES:
+            allowed = ", ".join(f"{name}:" for name in SAFE_LINK_SCHEMES)
+            return f"Links starting with '{scheme}:' are not imported because they can run programs or fetch files. Only {allowed} links can be."
+        if str(candidate.get("arguments") or "").strip() and ntpath.basename(location).casefold() in SCRIPT_HOSTS:
+            return "Commands that give arguments to a command line or script host (cmd, PowerShell and the like) are not imported."
         return None
 
     def _validate_group_targets(self, command: dict, known_names: set[str] | None) -> str | None:
@@ -361,6 +571,19 @@ class CommandManager:
         if entry["type"] == "group":
             entry["location"] = ""
             entry["targets"] = [str(target) for target in command.get("targets", [])]
+        if entry["type"] == "file":
+            # A launch setting the caller did not mention stays as it was,
+            # unless the command now opens something else.
+            previous = next((existing for existing in commands if existing.get("name") == match_name), None)
+            for key in LAUNCH_KEYS:
+                if key in command:
+                    value = str(command.get(key) or "").strip()
+                elif previous is not None and previous.get("location") == entry["location"]:
+                    value = str(previous.get(key) or "").strip()
+                else:
+                    value = ""
+                if value:
+                    entry[key] = value
 
         for i, existing in enumerate(commands):
             if existing.get("name") == match_name:
@@ -393,8 +616,20 @@ class CommandManager:
 
     # ------------------------------------------------------- import / export
 
+    def drop_clashing_aliases(self, candidates: list[dict]) -> list[dict]:
+        """Copies of import candidates without the aliases that could not be
+        saved: ones an existing command already uses, the names of other
+        candidates, and ones an earlier candidate has. Suggested aliases are
+        a convenience, so a clash costs the alias, never the command."""
+        return drop_clashing_aliases(candidates, set(self._reserved_keywords()))
+
     def import_program_commands(self, candidates: list[dict]) -> dict:
-        """Append selected program candidates without changing existing commands."""
+        """Append selected program candidates without changing existing commands.
+
+        An alias that is already taken (by a command, or by a candidate
+        earlier in this batch) is left off rather than stopping the command
+        being added; the summary's "dropped_aliases" lists them by command.
+        """
         commands = self._read_raw_commands()
         existing_locations = self._command_locations(commands)
         # Names and aliases claimed earlier in this batch. validate_command
@@ -402,26 +637,40 @@ class CommandManager:
         # candidates sharing a name (a suggestion and a Start Menu shortcut for
         # the same tool) would both be written.
         batch_keywords: set[str] = set()
+        reserved = set(self._reserved_keywords(commands=commands))
         imported: list[str] = []
         skipped: list[str] = []
+        dropped_aliases: dict[str, list[str]] = {}
 
         for candidate in candidates:
             location = _path_key(Path(str(candidate.get("location", ""))))
             if location in existing_locations:
                 skipped.append(candidate.get("name", ""))
                 continue
-            keywords = {
-                str(keyword).strip().casefold() for keyword in [candidate.get("name", ""), *candidate.get("aliases", [])]
-            }
-            if keywords & batch_keywords or self.validate_command(candidate):
+            name_key = str(candidate.get("name", "")).strip().casefold()
+            if name_key in batch_keywords:
                 skipped.append(candidate.get("name", ""))
                 continue
+            aliases: list[str] = []
+            for alias in candidate.get("aliases", []):
+                key = str(alias).strip().casefold()
+                if key and key != name_key and key not in reserved and key not in batch_keywords and key not in {a.casefold() for a in aliases}:
+                    aliases.append(str(alias).strip())
+                elif key:
+                    dropped_aliases.setdefault(str(candidate.get("name", "")), []).append(str(alias))
+            candidate = {**candidate, "aliases": aliases}
+            if self.validate_command(candidate):
+                skipped.append(candidate.get("name", ""))
+                dropped_aliases.pop(str(candidate.get("name", "")), None)
+                continue
+            keywords = {name_key, *(alias.casefold() for alias in aliases)}
             entry = {
                 "name": candidate["name"],
-                "aliases": list(candidate.get("aliases", [])),
+                "aliases": aliases,
                 "location": candidate.get("location", ""),
                 "description": candidate.get("description", ""),
                 "type": candidate.get("type", "file"),
+                **(_launch_fields(candidate) if candidate.get("type", "file") == "file" else {}),
                 **_recipe_fields(candidate),
             }
             if candidate.get("icon"):
@@ -436,7 +685,12 @@ class CommandManager:
             self._write_raw_commands(commands)
             self.reload_command_trie()
 
-        return {"imported": imported, "skipped": skipped, "candidate_count": len(candidates)}
+        return {
+            "imported": imported,
+            "skipped": skipped,
+            "candidate_count": len(candidates),
+            "dropped_aliases": dropped_aliases,
+        }
 
     def _generalize_path(self, location: str) -> str:
         """Replace the current user's home directory with a portable '~' placeholder."""
@@ -517,10 +771,16 @@ class CommandManager:
                 entry["browser"] = cmd["browser"]
             if cmd_type == "group":
                 entry["targets"] = list(cmd.get("targets", []))
+            if cmd_type == "file":
+                launch = _launch_fields(cmd)
+                for key in ("working_folder", "process_path"):
+                    if key in launch:
+                        launch[key] = self._generalize_path(launch[key])
+                entry.update(launch)
             portable.append(entry)
 
         blocks = [_serialize_command(cmd) for cmd in portable]
-        file_path.write_text("\n".join(blocks), encoding="utf-8")
+        atomic_write_text(file_path, "\n".join(blocks))
         return len(portable)
 
     def check_import_candidate(self, candidate: dict) -> tuple[str | None, bool]:
@@ -529,7 +789,15 @@ class CommandManager:
         ``error`` is a validation message if the target is missing or malformed.
         ``conflict`` is True if the name, an alias, or the location collides
         with a command that already exists.
+
+        A candidate read from a shared file (marked ``_shared``) is first held
+        to import_problem, whose reason becomes the error; nothing about its
+        target is looked up on disk then.
         """
+        if candidate.get("_shared"):
+            problem = self.import_problem(candidate)
+            if problem:
+                return problem, False
         existing_commands = self._read_raw_commands()
         existing_locations = self._command_locations(existing_commands)
         reserved = self._reserved_keywords(commands=existing_commands)
@@ -553,27 +821,42 @@ class CommandManager:
         with file_path.open("rb") as f:
             cfg = tomllib.load(f)
 
+        entries = cfg.get("command", [])
         candidates = []
-        for cmd_data in cfg.get("command", []):
-            name = str(cmd_data.get("name", "")).strip()
-            aliases = list(cmd_data.get("aliases", []))
-            location = str(cmd_data.get("location", ""))
+        for cmd_data in entries if isinstance(entries, list) else []:
+            problem = _entry_problem(cmd_data)
+            if problem:
+                logger.warning("Skipped a command in %s: %s", file_path, problem)
+                continue
+            name = cmd_data["name"].strip()
+            location = cmd_data.get("location") or ""
             cmd_type = cmd_data.get("type") or ("url" if location.startswith(("http://", "https://")) else "file")
-            expanded_location = location if cmd_type == "url" else str(Path(location).expanduser())
 
             candidate = {
                 "name": name,
-                "aliases": aliases,
-                "location": expanded_location,
-                "description": cmd_data.get("description", ""),
+                "aliases": list(cmd_data.get("aliases") or []),
+                "location": location,
+                "description": cmd_data.get("description") or "",
                 "type": cmd_type,
+                # Held to import_problem for as long as it is a candidate.
+                "_shared": True,
             }
-            for key in (*ICON_RECIPE_KEYS, ICON_SOURCE_DATA_KEY, "browser"):
+            # icon_source is left behind on purpose: it names a file on the
+            # machine that exported it. Only artwork embedded in the export
+            # (ICON_SOURCE_DATA_KEY) travels.
+            for key in ("icon_glyph", "icon_color", "icon_background", ICON_SOURCE_DATA_KEY, "browser"):
                 if cmd_data.get(key):
                     candidate[key] = str(cmd_data[key])
+            if cmd_type == "file":
+                candidate.update(_launch_fields(cmd_data))
             if cmd_type == "group":
                 candidate["location"] = ""
-                candidate["targets"] = [str(target) for target in cmd_data.get("targets", [])]
+                candidate["targets"] = list(cmd_data.get("targets") or [])
+            if self.import_problem(candidate) is None and cmd_type == "file":
+                # "~" becomes this user's home folder; links are left alone.
+                for key in ("location", "working_folder", "process_path"):
+                    if candidate.get(key) and not is_link_location(candidate[key]):
+                        candidate[key] = str(Path(candidate[key]).expanduser())
             candidate["_error"], candidate["_conflict"] = self.check_import_candidate(candidate)
             candidates.append(candidate)
 
@@ -592,7 +875,7 @@ class CommandManager:
         known_names |= {system["name"].casefold() for system in self._get_system_commands()}
         for candidate in candidates:
             name = str(candidate.get("name", "")).strip()
-            if self.validate_target(candidate, known_names):
+            if (candidate.get("_shared") and self.import_problem(candidate)) or self.validate_target(candidate, known_names):
                 skipped.append(name)
                 continue
 
@@ -625,6 +908,8 @@ class CommandManager:
                 entry["browser"] = candidate["browser"]
             if cmd_type == "group":
                 entry["targets"] = [str(target) for target in candidate.get("targets", [])]
+            if cmd_type == "file":
+                entry.update(_launch_fields(candidate))
             commands.append(entry)
             known_names.add(name.casefold())
             for keyword in keywords:
@@ -687,31 +972,43 @@ class CommandManager:
     # ------------------------------------------------------------ persistence
 
     def _write_raw_commands(self, commands: list[dict]):
+        if getattr(self, "_unreadable_file", False):
+            # The file Dash could not read is still there. Set it aside now if
+            # that has become possible; otherwise refuse, since writing would
+            # replace the commands in it with the (empty) list Dash started with.
+            path = self.command_file_path
+            if path.exists() and quarantine_file(path) is None:
+                raise CommandsFileUnreadableError(
+                    f"Dash couldn't read your commands file, so it won't save over it. "
+                    f"Close anything that has {path.name} open, then restart Dash."
+                )
+            self._unreadable_file = False
         blocks = [_serialize_command(cmd) for cmd in commands]
-        self.command_file_path.write_text("\n".join(blocks), encoding="utf-8")
+        atomic_write_text(self.command_file_path, "\n".join(blocks))
 
     def reload_command_trie(self):
-        commands, keyword_to_command, conflicts = self._load_commands_from_file()
+        """Load commands.toml again and rebuild the search indexes.
 
-        if conflicts:
-            conflict_details = "\n".join([f"Keyword '{k}' conflicts between '{cmd1}' and '{cmd2}'" for k, cmd1, cmd2 in conflicts])
-            raise ValueError(f"Keyword conflicts found:\n{conflict_details}")
-
+        Never raises for a bad file: problems are noted in load_warnings.
+        """
+        commands, keyword_to_command = self._load_commands_from_file()
         self.commands = commands
 
         # Reset and rebuild trie
-        self.lookup_trie = CommandTrie(case_sensitive=not self.settings.search.ignore_case)
+        case_sensitive = not self.settings.search.ignore_case
+        self.lookup_trie = CommandTrie(case_sensitive=case_sensitive)
         for keyword, command_name in keyword_to_command.items():
             self.lookup_trie.insert(keyword, command_name)
         self.keyword_index = {self.lookup_trie.normalize(str(keyword)): name for keyword, name in keyword_to_command.items()}
+        self.word_index = WordStartIndex(case_sensitive=case_sensitive)
+        self.word_index.build((str(command["name"]), name) for name, command in commands.items())
 
     # -------------------------------------------------------------- searching
 
     def _is_exact_match(self, command: dict, text: str) -> bool:
         """True if `text` is the whole of the command's name or one of its aliases."""
-        normalize = self.lookup_trie.normalize
-        wanted = normalize(text)
-        return any(normalize(str(keyword)) == wanted for keyword in (command.get("name", ""), *command.get("aliases", [])))
+        # The keyword index holds every name and alias, built-in commands included.
+        return self.keyword_index.get(self.lookup_trie.normalize(text)) == command.get("name")
 
     def completion_keyword(self, name: str | None, text: str) -> str | None:
         """The name or alias of command `name` that `text` is the start of.
@@ -738,25 +1035,46 @@ class CommandManager:
         A command whose name or alias is exactly what was typed always comes
         first: an alias is a promise that those letters mean that command.
         The rest follow the `sort_results` setting: most-run first (ties by
-        name) or purely by name.
+        name) or purely by name. Every match is sorted before the list is cut
+        to `max_results`, so the order never depends on which matches the
+        trie happened to reach first.
+
+        With `match_word_starts` on, commands with a later word of the name
+        starting with `text` ("code" for Visual Studio Code) follow all of
+        those, in the same order. A search keyword with its query leads only
+        when nothing starts with the whole text; otherwise it follows those
+        commands, so "google ma" still offers Google Maps first.
         """
-        max_results = self.settings.search.max_results
-        command_names = self.lookup_trie.search_prefix(text, max_results=max_results)
-        results = [self.commands[name] for name in command_names if name in self.commands]
+        max_results = max(1, int(self.settings.search.max_results or 1))
+        by_popularity = self.settings.search.sort_results == "popularity"
 
-        def order(command: dict):
-            exact = 0 if self._is_exact_match(command, text) else 1
-            if self.settings.search.sort_results == "popularity":
-                return (exact, -_safe_run_count(command.get("times_executed")), command["name"].lower())
-            return (exact, command["name"].lower())
+        def rank(command: dict):
+            if by_popularity:
+                return (-_safe_run_count(command.get("times_executed")), command["name"].lower())
+            return (command["name"].lower(),)
 
-        results = sorted(results, key=order)
+        prefix_names = self.lookup_trie.search_prefix(text, max_results=None)
+        results = [self.commands[name] for name in prefix_names if name in self.commands]
+        results.sort(key=lambda command: (0 if self._is_exact_match(command, text) else 1, *rank(command)))
+
+        word_matches: list[dict] = []
+        if getattr(self.settings.search, "match_word_starts", False):
+            found = set(prefix_names)
+            word_matches = [self.commands[name] for name in self.word_index.search_prefix(text) if name in self.commands and name not in found]
+            word_matches.sort(key=rank)
+
         search = self.match_search_keyword(text)
-        if search is not None:
-            # The search leads: typing a keyword and a space says what is wanted.
-            command, query = search
-            results = [{**command, "_query": query}, *(result for result in results if result["name"] != command["name"])]
-        return results
+        if search is None:
+            return (results + word_matches)[:max_results]
+
+        command, query = search
+        results = [result for result in results if result["name"] != command["name"]]
+        word_matches = [result for result in word_matches if result["name"] != command["name"]]
+        # Typing a keyword and a space says a search is wanted, unless some
+        # command's own name carries on with those very letters.
+        position = min(len(results), max_results - 1)
+        search_row = {**command, "_query": query}
+        return (results[:position] + [search_row] + results[position:] + word_matches)[:max_results]
 
     def match_search_keyword(self, text: str) -> tuple[dict, str] | None:
         """``(command, query)`` when the text is a search keyword, a space,
@@ -782,11 +1100,20 @@ class CommandManager:
 
     # -------------------------------------------------------------- execution
 
-    def execute_command(self, main_window: "MainWindow", name: str, query: str | None = None) -> str | None:
+    def execute_command(
+        self,
+        main_window: "MainWindow",
+        name: str,
+        query: str | None = None,
+        *,
+        new_instance: bool = False,
+    ) -> str | None:
         """Run the command called `name`, if there is one.
 
         `query` is the text typed after a search keyword; a search link run
-        without one opens its site's home page.
+        without one opens its site's home page. `new_instance` starts a new
+        copy of an app even if one is open and the switch_to_open_apps
+        setting is on, for this launch only.
 
         Returns None on success, or a plain-language reason the launch
         failed so the caller can show it and offer a way to fix the command.
@@ -794,13 +1121,21 @@ class CommandManager:
         cmd = self.commands.get(name)
         if cmd is None:
             return None
-        error = self._launch(main_window, cmd, query, {cmd["name"]})
+        error = self._launch(main_window, cmd, query, {cmd["name"]}, new_instance=new_instance)
         # A group counts as opened even when one of its commands did not.
         if error is None or cmd.get("type") == "group":
             self.increment_run_count(cmd["name"])
         return error
 
-    def _launch(self, main_window: "MainWindow", cmd: dict, query: str | None, opening: set[str]) -> str | None:
+    def _launch(
+        self,
+        main_window: "MainWindow",
+        cmd: dict,
+        query: str | None,
+        opening: set[str],
+        *,
+        new_instance: bool = False,
+    ) -> str | None:
         """Open one command; None on success, otherwise the reason it failed.
         `opening` holds the groups being opened, so a group inside itself stops."""
         try:
@@ -817,8 +1152,8 @@ class CommandManager:
                     location = fill_query(location, query or "")
                 self._open_url(location, cmd.get("browser") or self.settings.general.browser)
             else:
-                self._open_file(cmd.get("_path") or cmd["location"])
-            print(f"Executing: {cmd['description']}")
+                self._open_file(cmd.get("_path") or cmd["location"], **_launch_fields(cmd), switch=not new_instance)
+            logger.info("Opened %s", cmd.get("name"))
             return None
         except FileNotFoundError as error:
             return str(error)
@@ -826,6 +1161,7 @@ class CommandManager:
             # os.startfile: no app associated, access denied, and the like.
             return f"Windows could not open it: {error.strerror or error}"
         except Exception as error:  # pragma: no cover - last resort
+            logger.exception("Unexpected error opening %s", cmd.get("name"))
             return f"Unexpected error: {error}"
 
     def _launch_group(self, main_window: "MainWindow", group: dict, opening: set[str]) -> str | None:
@@ -855,27 +1191,183 @@ class CommandManager:
         if action == "open_settings":
             main_window.open_settings_editor()
 
-    def _open_file(self, file_path):
+    def _open_file(
+        self,
+        file_path,
+        *,
+        arguments: str = "",
+        working_folder: str = "",
+        process_path: str = "",
+        switch: bool = True,
+        operation: str = "open",
+    ):
         """Open a file or folder, or a link such as a Store app or Settings page.
         A program that is already open is brought to the front instead, when
-        the setting for that is on."""
+        the setting for that is on and `switch` allows it.
+
+        `arguments` go to the program as they are written, through
+        ShellExecute (os.startfile), never a shell. `process_path` is the
+        program a shortcut runs, used to find its window. `operation` "runas"
+        starts it as administrator.
+        """
         path = Path(file_path) if isinstance(file_path, str) else file_path
 
-        if getattr(self.settings.general, "switch_to_open_apps", False) and switch_to_running(str(path)):
+        # Arguments ask for a fresh start with them, and so does "runas".
+        switch = switch and not arguments and operation == "open"
+        if switch and getattr(self.settings.general, "switch_to_open_apps", False) and switch_to_running(process_path or str(path)):
             return
         if is_link_location(str(path)):
-            os.startfile(str(path))
+            if arguments or operation != "open":
+                os.startfile(str(path), operation, arguments=arguments)
+            else:
+                os.startfile(str(path))
             return
         if not path.exists():
             raise FileNotFoundError(f"The target no longer exists:\n{path}")
-        # Start programs in their own folder, as Explorer does. Many apps look
-        # for config and data next to the executable and fail when launched
-        # with Dash's working directory instead.
-        working_dir = str(path.parent) if path.is_file() else None
-        os.startfile(str(path), cwd=working_dir)
+        if working_folder:
+            folder = Path(working_folder).expanduser()
+            if not folder.is_dir():
+                raise FileNotFoundError(f"The working folder no longer exists:\n{folder}")
+            working_dir = str(folder)
+        elif path.is_file() and path.suffix.lower() != ".lnk":
+            # Start programs in their own folder, as Explorer does. Many apps
+            # look for config and data next to the executable and fail when
+            # launched with Dash's working directory instead. A shortcut
+            # starts in the folder it names itself.
+            working_dir = str(path.parent)
+        else:
+            working_dir = None
+        if arguments or operation != "open":
+            os.startfile(str(path), operation, arguments=arguments, cwd=working_dir)
+        else:
+            os.startfile(str(path), cwd=working_dir)
 
     def _open_url(self, url: str, browser_key: str | None = None):
         """Open a URL in the command's browser, the configured one, or the default."""
         if not url.startswith(("http://", "https://")):
             url = "https://" + url
         open_in_browser(url, browser_key)
+
+    # ------------------------------------------------------- launch options
+    # For the result's context menu. Each takes a command name and returns
+    # None on success or a plain-language reason, like execute_command.
+
+    def _local_target(self, cmd: dict | None) -> Path | None:
+        """The file or folder an app or file command opens; None for links,
+        websites, groups and built-in commands."""
+        if cmd is None or cmd.get("type") != "file":
+            return None
+        location = str(cmd.get("location") or "").strip()
+        if not location or is_link_location(location):
+            return None
+        return cmd.get("_path") or Path(location).expanduser()
+
+    def can_run_as_administrator(self, name: str) -> bool:
+        """True for an app or file command (not a folder, link or website)."""
+        target = self._local_target(self.commands.get(name))
+        return target is not None and not target.is_dir()
+
+    def run_as_administrator(self, name: str) -> str | None:
+        """Start an app or file command elevated (ShellExecute's "runas"),
+        with its arguments and working folder. Saying No to the Windows
+        prompt is not an error: None comes back and nothing is counted."""
+        cmd = self.commands.get(name)
+        if not self.can_run_as_administrator(name):
+            return "Only apps and files can be run as administrator."
+        try:
+            self._open_file(cmd.get("_path") or cmd["location"], **_launch_fields(cmd), switch=False, operation="runas")
+        except FileNotFoundError as error:
+            return str(error)
+        except OSError as error:
+            if getattr(error, "winerror", None) == _ERROR_CANCELLED:
+                return None
+            return f"Windows could not open it: {error.strerror or error}"
+        self.increment_run_count(cmd["name"])
+        return None
+
+    def containing_folder(self, name: str) -> Path | None:
+        """The folder "Open containing folder" shows, or None when the
+        command has none. A shortcut with a known program shows the program."""
+        cmd = self.commands.get(name)
+        target = self._local_target(cmd)
+        if target is None:
+            return None
+        if target.suffix.lower() == ".lnk" and cmd.get("process_path"):
+            target = Path(cmd["process_path"]).expanduser()
+        return target if target.is_dir() else target.parent
+
+    def open_containing_folder(self, name: str) -> str | None:
+        """Show the command's file selected in File Explorer, or open the
+        folder itself for a folder command."""
+        cmd = self.commands.get(name)
+        target = self._local_target(cmd)
+        if target is None:
+            return "This command does not open a file or folder."
+        if target.suffix.lower() == ".lnk" and cmd.get("process_path"):
+            target = Path(cmd["process_path"]).expanduser()
+        try:
+            if target.is_dir():
+                os.startfile(str(target))
+                return None
+            if not target.exists():
+                return f"The target no longer exists:\n{target}"
+            explorer = Path(os.environ.get("SystemRoot", r"C:\Windows")) / "explorer.exe"
+            # One command line, not a list: Explorer wants /select,"path" and
+            # would misread the quoting a list gets. No shell is involved.
+            subprocess.Popen(f'"{explorer}" /select,"{target}"')
+        except OSError as error:
+            return f"Windows could not open it: {error.strerror or error}"
+        return None
+
+    def copy_text(self, name: str, query: str | None = None) -> str | None:
+        """What "Copy path" or "Copy address" puts on the clipboard: the file
+        or folder path, or the web address (a search link filled in with
+        `query`, or its site with none). None for groups and built-in
+        commands; the GUI does the copying."""
+        cmd = self.commands.get(name)
+        if cmd is None:
+            return None
+        location = str(cmd.get("location") or "")
+        if cmd.get("type") == "url":
+            return fill_query(location, query or "") if is_search_link(location) else location
+        if cmd.get("type") == "file" and location:
+            return location if is_link_location(location) else str(cmd.get("_path") or Path(location).expanduser())
+        return None
+
+    # ----------------------------------------------------------------- groups
+
+    def groups_containing(self, name: str) -> list[str]:
+        """Names of the groups that open the command `name`, so deleting it
+        can say which groups will lose it."""
+        wanted = str(name).strip().casefold()
+        return [
+            command["name"]
+            for command in self.commands.values()
+            if command.get("type") == "group" and any(str(target).strip().casefold() == wanted for target in command.get("targets", []))
+        ]
+
+    def group_summary(self, name: str, max_length: int = 60) -> str:
+        """ "Opens: Mail, Calendar, Slack and 2 more" for a group, to show when
+        it has no description of its own. Empty for anything else."""
+        command = self.find_command(name)
+        if command is None or command.get("type") != "group":
+            return ""
+        targets = [str(target).strip() for target in command.get("targets", []) if str(target).strip()]
+        if not targets:
+            return ""
+        # Targets are matched without regard to case; show the names as they are.
+        targets = [(self.find_command(target) or {}).get("name", target) for target in targets]
+        shown: list[str] = []
+        for index, target in enumerate(targets):
+            remaining = len(targets) - index - 1
+            more = f" and {remaining} more" if remaining else ""
+            if shown and len("Opens: " + ", ".join([*shown, target]) + more) > max_length:
+                break
+            shown.append(target)
+        text = "Opens: " + ", ".join(shown)
+        if len(text) > max_length:
+            text = text[: max(len("Opens: ") + 1, max_length - 1)].rstrip(", ") + "\u2026"
+        remaining = len(targets) - len(shown)
+        if remaining:
+            text += f" and {remaining} more"
+        return text

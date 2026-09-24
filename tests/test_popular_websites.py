@@ -2,7 +2,7 @@ import unittest
 from urllib.parse import urlsplit
 
 from src.browsers import fill_query, is_search_link
-from src.popular_websites import POPULAR_WEBSITES, discover_popular_websites, site_host
+from src.popular_websites import POPULAR_WEBSITES, amazon_domain, discover_popular_websites, site_host, wikipedia_language
 
 
 class PopularWebsiteTests(unittest.TestCase):
@@ -46,6 +46,24 @@ class PopularWebsiteTests(unittest.TestCase):
             keywords += [name.casefold(), *(alias.casefold() for alias in aliases)]
         duplicates = {keyword for keyword in keywords if keywords.count(keyword) > 1}
         self.assertEqual(duplicates, set())
+
+    def test_wikipedia_and_amazon_follow_the_locale(self):
+        sites = {candidate["name"]: candidate["location"] for candidate in discover_popular_websites(locale_name="de_DE")}
+        self.assertEqual(sites["Wikipedia"], "https://de.wikipedia.org/w/index.php?search={query}")
+        self.assertEqual(sites["Amazon"], "https://www.amazon.de/s?k={query}")
+        self.assertEqual(sites["Google"], "https://www.google.com/search?q={query}", "the rest stay international")
+        for locale_name, domain in (("en_GB", "amazon.co.uk"), ("ja_JP", "amazon.co.jp"), ("pt-BR", "amazon.com.br"), ("es_MX", "amazon.com.mx"), ("en_AU", "amazon.com.au"), ("en_US", "amazon.com"), ("sv_SE", "amazon.com")):
+            with self.subTest(locale_name=locale_name):
+                self.assertEqual(amazon_domain(locale_name), domain)
+
+    def test_unknown_locales_fall_back_to_english_and_amazon_com(self):
+        for locale_name in ("", None, "C", "English_United Kingdom"):
+            with self.subTest(locale_name=locale_name):
+                self.assertEqual(wikipedia_language(locale_name), "en")
+                self.assertEqual(amazon_domain(locale_name), "amazon.com")
+        self.assertEqual(wikipedia_language("fr_CA.UTF-8"), "fr")
+        self.assertEqual(wikipedia_language("nb_NO"), "no")
+
 
 
 if __name__ == "__main__":

@@ -130,6 +130,83 @@ SUGGESTED_TOOLS = (
 )
 
 
+# Vendor names that lead a program's name without being what anyone types to
+# find it: "Microsoft Word" is "word", "Google Chrome" is "chrome".
+VENDOR_PREFIXES = (
+    "Microsoft",
+    "Google",
+    "Adobe",
+    "Mozilla",
+    "Apple",
+    "Autodesk",
+    "JetBrains",
+    "Oracle",
+    "VMware",
+    "NVIDIA",
+    "Intel",
+    "AMD",
+    "Corel",
+    "Logitech",
+)
+
+
+def suggest_aliases(name: str) -> list[str]:
+    """Aliases worth offering for a scanned program, lowercase and editable:
+    its initials when it has two or more words ("vsc" for Visual Studio Code)
+    and its name without the vendor ("word" for Microsoft Word).
+
+    A bracketed note ("Microsoft Teams (work or school)") is left out, and
+    nothing equal to the name itself is suggested.
+    """
+    plain = re.sub(r"\s*[(\[].*?[)\]]", " ", str(name or "")).strip()
+    words = [word for word in re.split(r"[\s\-_]+", plain) if word]
+    suggestions: list[str] = []
+
+    initials = "".join(word[0] for word in words if word[0].isalpha())
+    if len(words) >= 2 and len(initials) >= 2:
+        suggestions.append(initials.casefold())
+
+    for vendor in VENDOR_PREFIXES:
+        if plain.casefold().startswith(vendor.casefold() + " "):
+            rest = plain[len(vendor) :].strip()
+            if rest:
+                suggestions.append(rest.casefold())
+            break
+
+    kept: list[str] = []
+    for alias in suggestions:
+        if alias and alias != str(name).strip().casefold() and alias not in kept:
+            kept.append(alias)
+    return kept
+
+
+def drop_clashing_aliases(candidates: list[dict], known_keywords: set[str] = frozenset()) -> list[dict]:
+    """Copies of `candidates` without the aliases that could not be saved.
+
+    An alias is dropped when it is already a name or alias in
+    `known_keywords` (casefolded), when it is the name of another candidate,
+    or when an earlier candidate already has it. Saving and importing reject
+    a keyword that is taken, so a suggested alias that clashes would
+    otherwise stop the whole command being added. Candidates themselves are
+    never dropped here, and the originals are not changed.
+    """
+    names = {str(candidate.get("name", "")).strip().casefold() for candidate in candidates}
+    taken = set(known_keywords)
+    kept: list[dict] = []
+    for candidate in candidates:
+        own_name = str(candidate.get("name", "")).strip().casefold()
+        aliases = list(candidate.get("aliases") or [])
+        free: list = []
+        for alias in aliases:
+            key = str(alias).strip().casefold()
+            if not key or key in taken or (key in names and key != own_name) or key == own_name:
+                continue
+            free.append(alias)
+            taken.add(key)
+        kept.append(candidate if free == aliases else {**candidate, "aliases": free})
+    return kept
+
+
 def discover_windows_suggestions() -> list[dict]:
     """Return commands for standard Windows folders and tools.
 
@@ -301,7 +378,7 @@ def discover_recent_program_commands(days: int = 365, max_commands: int | None =
 
     if shortcut_shell is not None:
         for shortcut_path in _start_menu_shortcuts():
-            target_path = _shortcut_target(shortcut_path, shortcut_shell)
+            target_path, arguments = _shortcut_details(shortcut_path, shortcut_shell)
             _add_program_command(
                 commands,
                 seen_locations,
@@ -311,6 +388,7 @@ def discover_recent_program_commands(days: int = 365, max_commands: int | None =
                 from_registry=False,
                 usage=usage,
                 shortcut_path=shortcut_path,
+                shortcut_arguments=arguments,
             )
 
     for exe_name, target_path in _app_paths_registry_targets():
@@ -338,18 +416,10 @@ def drop_known_names(candidates: list[dict], known_keywords: set[str]) -> list[d
     A candidate whose name is already a command name or alias could not be
     added under that name anyway. `known_keywords` are casefolded.
     """
-    kept = []
-    for candidate in candidates:
-        if str(candidate.get("name", "")).strip().casefold() in known_keywords:
-            continue
-        aliases = candidate.get("aliases") or []
-        free = [alias for alias in aliases if str(alias).strip().casefold() not in known_keywords]
-        if len(free) != len(aliases):
-            # An alias another command already has would stop the whole
-            # recommendation being added; offer it without that alias.
-            candidate = {**candidate, "aliases": free}
-        kept.append(candidate)
-    return kept
+    kept = [candidate for candidate in candidates if str(candidate.get("name", "")).strip().casefold() not in known_keywords]
+    # An alias another command (or another recommendation) already has would
+    # stop the whole recommendation being added; offer it without that alias.
+    return drop_clashing_aliases(kept, known_keywords)
 
 
 def filter_new_program_commands(candidates: list[dict], existing_locations: set[str]) -> list[dict]:
@@ -370,14 +440,21 @@ def _add_program_command(
     from_registry: bool = False,
     usage: dict[str, tuple[int, float | None]] | None = None,
     shortcut_path: Path | None = None,
+    shortcut_arguments: str = "",
 ):
     if target_path is None or target_path.suffix.lower() != ".exe":
         return
     if _in_package_folder(target_path):
         return  # a Store app: offered by app id from the Applications folder instead
 
+    # A shortcut that passes arguments (Discord's "Update.exe --processStart
+    # Discord.exe", a Chrome profile's "--profile-directory") only works when
+    # started as the shortcut, so the shortcut is the command. The same exe
+    # with other arguments is a different command, not a duplicate.
+    with_arguments = bool(shortcut_arguments and shortcut_path is not None)
     target_key = _path_key(target_path)
-    if target_key in seen_locations:
+    seen_key = f"{target_key}|{shortcut_arguments.casefold()}" if with_arguments else target_key
+    if seen_key in seen_locations:
         return
 
     name = name.strip()
@@ -387,15 +464,19 @@ def _add_program_command(
     if _is_noise_candidate(name, target_path, from_registry):
         return
 
-    seen_locations.add(target_key)
+    seen_locations.add(seen_key)
     seen_names.add(name.casefold())
     command = {
         "name": name,
-        "aliases": [],
-        "location": str(target_path),
+        "aliases": suggest_aliases(name),
+        "location": str(shortcut_path if with_arguments else target_path),
         "description": f"Opens {name}",
         "type": "file",
     }
+    if with_arguments:
+        # The program that ends up running, for switching to its window and
+        # for its icon; the shortcut itself is what gets started.
+        command["process_path"] = str(_launched_program(target_path, shortcut_arguments))
     if usage:
         # Starting a program from its Start Menu entry is recorded against
         # the shortcut, starting it any other way against the executable.
@@ -541,7 +622,7 @@ def discover_packaged_apps() -> list[dict]:
         seen.add(app_id_key(app_id))
         command = {
             "name": name,
-            "aliases": [],
+            "aliases": suggest_aliases(name),
             "location": f"{APPS_FOLDER}\\{app_id}",
             "description": f"Opens {name}",
             "type": "file",
@@ -586,6 +667,30 @@ def _logo_rank(path: Path) -> tuple[int, int]:
 _LINK_SCHEME = re.compile(r"^[A-Za-z][A-Za-z0-9+.\-]+:")
 
 
+# Link schemes a shared commands file may use. Built-in features only make
+# ms-settings: (Settings pages) and shell: (Store apps, shell folders) links;
+# other registered schemes (ms-msdt:, search-ms:, file:...) can run or fetch
+# things a person would not expect from opening a command.
+SAFE_LINK_SCHEMES = ("http", "https", "mailto", "ms-settings", "shell")
+
+
+def link_scheme(location: str) -> str:
+    """The lowercase scheme of a link ("ms-settings"), or "" for a path."""
+    text = str(location).strip()
+    match = _LINK_SCHEME.match(text)
+    return match.group(0)[:-1].casefold() if match else ""
+
+
+def is_network_location(location: str) -> bool:
+    """True for a UNC path (\\\\server\\share, //server/share) or a device path.
+
+    Checked on the text alone: asking Windows whether a UNC path exists
+    connects to that server and hands it the user's sign-in hash.
+    """
+    text = str(location).strip().replace("/", "\\")
+    return text.startswith("\\\\")
+
+
 def is_link_location(location: str) -> bool:
     """True for a command that Windows opens as a link rather than a path:
     a Store app by app id, a Settings page, a shell folder. Web addresses
@@ -616,24 +721,50 @@ def _start_menu_shortcuts() -> list[Path]:
 
 
 def _shortcut_target(shortcut_path: Path, shell) -> Path | None:
+    return _shortcut_details(shortcut_path, shell)[0]
+
+
+def _shortcut_details(shortcut_path: Path, shell) -> tuple[Path | None, str]:
+    """(the exe a shortcut starts, the arguments it passes); (None, "") for a
+    shortcut Dash does not offer."""
     try:
         shortcut = shell.CreateShortcut(str(shortcut_path))
         target = str(shortcut.TargetPath or "").strip()
         arguments = str(shortcut.Arguments or "").strip()
     except Exception:
-        return None
+        return None, ""
 
     if not target:
-        return None
+        return None, ""
 
     path = _existing_exe_path(target)
     # A shortcut that hands arguments to a Windows tool ("Edit Commands" ->
     # notepad.exe <file>, "Install Tools" -> cmd.exe /c ...) is a task, not an
-    # app. Dash only records the bare exe, which would just duplicate the
-    # built-in tool under a misleading name.
+    # app, and would just duplicate the built-in tool under a misleading name.
     if path is not None and arguments and _in_windows_dir(path):
-        return None
-    return path
+        return None, ""
+    return path, arguments if path is not None else ""
+
+
+def _launched_program(target_path: Path, arguments: str) -> Path:
+    """The program a shortcut ends up running. Squirrel installers (Discord,
+    Slack, Teams classic) point the shortcut at Update.exe, which starts the
+    real exe from the newest "app-<version>" folder beside it."""
+    match = re.search(r"--processStart(?:=|\s+)\"?([^\"\s]+\.exe)", arguments, re.IGNORECASE)
+    if match is None:
+        return target_path
+    try:
+        versions = [folder for folder in target_path.parent.glob("app-*") if (folder / match.group(1)).is_file()]
+    except OSError:
+        versions = []
+    if not versions:
+        return target_path
+    newest = max(versions, key=lambda folder: _version_key(folder.name[len("app-") :]))
+    return newest / match.group(1)
+
+
+def _version_key(version: str) -> tuple:
+    return tuple(int(part) if part.isdigit() else -1 for part in re.split(r"[.\-]", version))
 
 
 def _in_windows_dir(path: Path) -> bool:
