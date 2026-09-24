@@ -147,9 +147,10 @@ class ListenerTests(unittest.TestCase):
     def test_update_and_stop_release_the_registration(self):
         self.user32.RegisterHotKey.return_value = 1
         listener = HotkeyListener("Alt+Space")
-        first_id = self.user32.RegisterHotKey.call_args.args[1]
+        first_hwnd, first_id = self.user32.RegisterHotKey.call_args.args[:2]
         listener.update_hotkey("Ctrl+Shift+K")
-        self.user32.UnregisterHotKey.assert_called_with(None, first_id)
+        # Released against the same window it was registered with.
+        self.user32.UnregisterHotKey.assert_called_with(first_hwnd, first_id)
         self.assertEqual(self.user32.RegisterHotKey.call_args.args[2:], (MOD_CONTROL | MOD_SHIFT | MOD_NOREPEAT, ord("K")))
         listener.stop()
         self.assertIsNone(listener._native_filter)

@@ -32,6 +32,7 @@ STARTUP_WAIT_MS = 5000
 RETRY_INTERVAL_MS = 100
 
 ERROR_ALREADY_EXISTS = 183
+ERROR_ACCESS_DENIED = 5
 
 
 def server_name() -> str:
@@ -62,9 +63,14 @@ def _acquire_windows_mutex(name: str) -> InstanceLock | None:
 
     # "Local\" keeps the mutex to this sign-in session.
     handle = kernel32.CreateMutexW(None, False, f"Local\\{name}")
-    already_exists = ctypes.get_last_error() == ERROR_ALREADY_EXISTS
+    error = ctypes.get_last_error()
+    already_exists = error == ERROR_ALREADY_EXISTS
     if not handle:
-        raise OSError(ctypes.get_last_error(), "CreateMutexW failed")
+        # A copy running as administrator owns a mutex a normal copy isn't
+        # allowed to open: that still means Dash is already running.
+        if error == ERROR_ACCESS_DENIED:
+            return None
+        raise OSError(error, "CreateMutexW failed")
     if already_exists:
         kernel32.CloseHandle(handle)
         return None

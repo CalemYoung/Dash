@@ -61,6 +61,10 @@ def toml_value(value) -> str:
     return toml_str(value)
 
 
+class SettingsFileUnreadableError(OSError):
+    """Saving was refused because the settings file could not be read at startup."""
+
+
 def _from_section(cls, data: dict):
     """Build a settings dataclass, ignoring keys it no longer knows about.
 
@@ -135,6 +139,7 @@ THEME_OPTIONS = ("system", "light", "dark")
 # The text colours Dash shipped with before it had a light theme. A settings
 # file still holding exactly these was never customised, so they are read as
 # "follow the theme" rather than forcing light text onto a light window.
+LEGACY_DEFAULT_HOTKEY = "Alt+F"
 LEGACY_DEFAULT_OPACITY = 0.97
 LEGACY_DEFAULT_TEXT_COLORS = {
     "search_text_color": "#f3f4f7",
@@ -190,6 +195,13 @@ class Settings:
     # Plain-language notes about problems met while loading (a damaged file
     # set aside, say), for the GUI to show once. Never saved.
     load_warnings: list[str] = field(default_factory=list, compare=False, repr=False)
+    # Friendly one-off notes about changes made on upgrade, for a tray
+    # notification. Never saved.
+    load_notices: list[str] = field(default_factory=list, compare=False, repr=False)
+    # Set when the file existed but could not be opened (locked by a sync
+    # client or antivirus, say). These are then defaults, not the person's
+    # settings, so save() refuses to write them over the real file.
+    read_failed: bool = field(default=False, compare=False, repr=False)
 
     @staticmethod
     def _resolve_asset_path(raw_path: str) -> str:
@@ -247,7 +259,11 @@ class Settings:
                     f"The old file was kept as:\n{moved}"
                 )
             else:
-                settings.load_warnings.append("Your settings file could not be read, so Dash is using the default settings for now.")
+                settings.read_failed = settings_path.exists()
+                settings.load_warnings.append(
+                    "Your settings file could not be opened, so Dash is using the default settings for now. "
+                    "Restart Dash to try again."
+                )
             return settings.normalize_resource_paths()
 
         problems: list[str] = []
@@ -267,6 +283,25 @@ class Settings:
             settings.search.sort_results = SORT_RESULTS_OPTIONS[0]
         if settings.ui.theme not in THEME_OPTIONS:
             settings.ui.theme = THEME_OPTIONS[0]
+        # Alt+F was the old default hotkey. Dash now registers its hotkey with
+        # Windows, which takes the key from every app, and Alt+F opens the
+        # File menu almost everywhere. Move it to the new default, once, and
+        # say so. Anyone who wants Alt+F back can choose it in Settings: a
+        # file this version saved always has hide_when_focus_lost, so only
+        # files from before the change are moved.
+        migrated = False
+        raw_general = data.get("general", {}) if isinstance(data.get("general"), dict) else {}
+        if (
+            "hide_when_focus_lost" not in raw_general
+            and settings.general.hotkey.replace(" ", "").casefold() == LEGACY_DEFAULT_HOTKEY.casefold()
+        ):
+            settings.general.hotkey = GeneralSettings().hotkey
+            settings.load_notices.append(
+                f"Dash now opens with {settings.general.hotkey}, so Alt+F opens File menus in your apps again. "
+                "You can change the key under Settings."
+            )
+            migrated = True
+
         # 0.97 was the old default opacity; it only dimmed the text.
         if settings.ui.window_opacity == LEGACY_DEFAULT_OPACITY:
             settings.ui.window_opacity = 1.0
@@ -283,6 +318,12 @@ class Settings:
             settings.general.launcher_screen = "mouse" if general["show_on_screen_with_mouse"] else "primary"
         if not str(settings.general.launcher_screen).strip():
             settings.general.launcher_screen = "mouse"
+        if migrated:
+            # Written back so the change and its notice happen only once.
+            try:
+                settings.save(settings_path)
+            except OSError:
+                log.warning("Could not save the migrated hotkey", exc_info=True)
         return settings.normalize_resource_paths()
 
     @classmethod
@@ -294,6 +335,11 @@ class Settings:
 
     def save(self, settings_path: Path):
         """Write settings using the same section structure accepted by load()."""
+        if self.read_failed and Path(settings_path).exists():
+            raise SettingsFileUnreadableError(
+                "Dash couldn't open your settings file when it started, so it won't save over it. "
+                "Restart Dash, then change your settings again."
+            )
         sections = {
             "general": asdict(self.general),
             "ui": asdict(self.ui),

@@ -152,6 +152,10 @@ class CommandManager:
         # list once it has shown it.
         self.load_warnings: list[str] = []
         self._kept_original = False
+        # A damaged file is only set aside on the first load. Once Dash is
+        # running, a file broken by a hand edit is left alone: Dash keeps the
+        # commands it has and refuses to save until the file is fixed.
+        self._loaded_once = False
         # Run counts live beside the commands file rather than in it, so that
         # launching a command never rewrites the user's command definitions.
         self.run_counts_path = command_file_path.parent / RUN_COUNTS_FILENAME
@@ -280,6 +284,11 @@ class CommandManager:
                 cfg = tomllib.load(f)
         except ValueError as error:  # TOMLDecodeError, or text that is not UTF-8
             logger.error("Commands file %s is unreadable: %s", path, error)
+            if not (report and not self._loaded_once):
+                raise CommandsFileUnreadableError(
+                    f"Your commands file has a mistake in it, so Dash won't change it. "
+                    f"Fix {path.name} (details: {error}), then try again."
+                ) from error
             moved = quarantine_file(path)
             if moved is not None:
                 self._warn(
@@ -292,6 +301,10 @@ class CommandManager:
                 self._warn(f"Your commands file could not be read, so Dash started without your commands. Details: {error}")
             return []
         except OSError as error:
+            if not (report and not self._loaded_once):
+                raise CommandsFileUnreadableError(
+                    f"Dash couldn't open your commands file, so it didn't change it. Try again in a moment. Details: {error}"
+                ) from error
             self._unreadable_file = True
             self._warn(f"Your commands file could not be opened, so Dash started without your commands. Details: {error}")
             return []
@@ -412,9 +425,20 @@ class CommandManager:
 
         return commands, keyword_to_command
 
-    def _read_raw_commands(self):
-        """Return the user command list from the file (system commands excluded)."""
-        return self._read_command_file()
+    def _read_raw_commands(self, for_saving: bool = False):
+        """Return the user command list from the file (system commands excluded).
+
+        Anything about to be written back reads with `for_saving`: if the file
+        can't be read then, CommandsFileUnreadableError stops the save rather
+        than replacing the file with a partial list. Read-only uses fall back
+        to the commands already loaded.
+        """
+        try:
+            return self._read_command_file()
+        except CommandsFileUnreadableError:
+            if for_saving:
+                raise
+            return [dict(command) for command in self.commands.values() if command.get("type") != "system"]
 
     @staticmethod
     def _command_locations(commands: list[dict]) -> set[str]:
@@ -571,7 +595,7 @@ class CommandManager:
         if error:
             raise ValueError(error)
 
-        commands = self._read_raw_commands()
+        commands = self._read_raw_commands(for_saving=True)
         match_name = original_name or command.get("name")
 
         entry = {
@@ -626,7 +650,7 @@ class CommandManager:
 
     def delete_command(self, name: str):
         """Remove a user command from commands.toml, then reload the trie."""
-        commands = [c for c in self._read_raw_commands() if c.get("name") != name]
+        commands = [c for c in self._read_raw_commands(for_saving=True) if c.get("name") != name]
         self._write_raw_commands(commands)
         if self.run_counts.pop(name, None) is not None:
             self._save_run_counts()
@@ -648,7 +672,7 @@ class CommandManager:
         earlier in this batch) is left off rather than stopping the command
         being added; the summary's "dropped_aliases" lists them by command.
         """
-        commands = self._read_raw_commands()
+        commands = self._read_raw_commands(for_saving=True)
         existing_locations = self._command_locations(commands)
         # Names and aliases claimed earlier in this batch. validate_command
         # only knows about commands already on disk, so without this two
@@ -882,7 +906,7 @@ class CommandManager:
 
     def import_commands(self, candidates: list[dict]) -> dict:
         """Append selected imported commands, never overriding existing ones."""
-        commands = self._read_raw_commands()
+        commands = self._read_raw_commands(for_saving=True)
         existing_locations = self._command_locations(commands)
         reserved = self._reserved_keywords(commands=commands)
 
@@ -958,7 +982,7 @@ class CommandManager:
 
     def has_user_commands(self) -> bool:
         """Whether the user has added any commands of their own (system commands excluded)."""
-        return bool(self._read_raw_commands())
+        return any(command.get("type") != "system" for command in self.commands.values())
 
     # ------------------------------------------------------------------ icons
 
@@ -968,7 +992,12 @@ class CommandManager:
         Commands that already point at a file in the icon store are skipped
         unless `force` is set. Returns the {name: icon_path} map that was saved.
         """
-        commands = self._read_raw_commands()
+        try:
+            commands = self._read_raw_commands(for_saving=True)
+        except CommandsFileUnreadableError:
+            # Nothing is rewritten while the file can't be read; the icons
+            # are resolved again on the next start.
+            return {}
         for entry in commands:
             if not entry.get("type"):
                 location = entry.get("location", "") or ""
@@ -1008,8 +1037,15 @@ class CommandManager:
         """Load commands.toml again and rebuild the search indexes.
 
         Never raises for a bad file: problems are noted in load_warnings.
+        After the first load, a file that can't be read leaves the commands
+        already loaded in place.
         """
-        commands, keyword_to_command = self._load_commands_from_file()
+        try:
+            commands, keyword_to_command = self._load_commands_from_file()
+        except CommandsFileUnreadableError as error:
+            self._warn(f"{error} Until then Dash keeps using the commands it already had.")
+            return
+        self._loaded_once = True
         self.commands = commands
 
         # Reset and rebuild trie

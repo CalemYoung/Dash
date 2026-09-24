@@ -140,3 +140,43 @@ class UnreadableFileSaveGuardTests(unittest.TestCase):
                 with self.assertRaises(CommandsFileUnreadableError):
                     manager.save_command({"name": "New", "location": "https://example.com", "type": "url", "aliases": []})
             self.assertIn("name = 'Kept'", path.read_text(encoding="utf-8"))
+
+
+class RuntimeDamageTests(unittest.TestCase):
+    """A file broken by a hand edit while Dash runs must never cost commands."""
+
+    def setUp(self):
+        self._folder = TemporaryDirectory()
+        self.path = Path(self._folder.name) / "commands.toml"
+        self.path.write_text(
+            "[[command]]\nname = 'Alpha'\nlocation = 'https://a.example'\ntype = 'url'\n"
+            "[[command]]\nname = 'Beta'\nlocation = 'https://b.example'\ntype = 'url'\n",
+            encoding="utf-8",
+        )
+        self.manager = CommandManager(self.path, Settings())
+        self.broken = self.path.read_text(encoding="utf-8") + "[[command]\nname = 'Oops'\n"
+        self.path.write_text(self.broken, encoding="utf-8")
+
+    def tearDown(self):
+        self._folder.cleanup()
+
+    def test_the_file_stays_where_it_is_and_the_loaded_commands_stay(self):
+        self.manager.reload_command_trie()
+        self.assertEqual(self.path.read_text(encoding="utf-8"), self.broken)
+        self.assertFalse(list(self.path.parent.glob("*.bad*")))
+        self.assertIn("Alpha", self.manager.commands)
+        self.assertTrue(self.manager.has_user_commands())
+        self.assertTrue(self.manager.load_warnings)
+
+    def test_saving_and_deleting_are_refused_until_the_file_is_fixed(self):
+        from src.command_manager import CommandsFileUnreadableError
+
+        with self.assertRaises(CommandsFileUnreadableError):
+            self.manager.save_command({"name": "Gamma", "location": "https://c.example", "type": "url", "aliases": []})
+        with self.assertRaises(CommandsFileUnreadableError):
+            self.manager.delete_command("Alpha")
+        self.assertEqual(self.path.read_text(encoding="utf-8"), self.broken)
+
+    def test_read_only_uses_fall_back_to_the_loaded_commands(self):
+        self.assertIsNone(self.manager.validate_command({"name": "Gamma", "location": "https://c.example", "type": "url", "aliases": []}))
+        self.assertIsNotNone(self.manager.validate_command({"name": "Alpha", "location": "https://c.example", "type": "url", "aliases": []}))

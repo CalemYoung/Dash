@@ -401,6 +401,7 @@ from .settings import (
     GeneralSettings,
     SearchSettings,
     Settings,
+    SettingsFileUnreadableError,
     ShortcutSettings,
     UISettings,
 )
@@ -1127,7 +1128,16 @@ class SettingsEditorPanel(QFrame):
         if not self._is_valid():
             return
         settings = self._collect()
-        settings.save(self._settings_path)
+        settings.read_failed = getattr(self._settings, "read_failed", False)
+        try:
+            settings.save(self._settings_path)
+        except OSError as error:
+            log.error("Could not save settings", exc_info=True)
+            message = str(error) if isinstance(error, SettingsFileUnreadableError) else (
+                "Dash couldn't save your settings. Make sure the settings file isn't open elsewhere and your drive has free space, then try again."
+            )
+            QMessageBox.warning(self, "Settings", message)
+            return
         theme_changed = settings.ui.theme != self._settings.ui.theme
         if theme_changed:
             # Re-theme before the window reacts to the new settings, so

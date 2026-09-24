@@ -316,6 +316,8 @@ class HotkeyListener(QObject):
         self.registration_error: str | None = None
         self.uses_system_hotkey = False
         self._native_id: int | None = None
+        self._native_hwnd: int | None = None
+        self._hotkey_window = None
         self._native_filter: _WmHotkeyFilter | None = None
         self._register()
         log.info("Hotkey listener registered: %s", hotkey)
@@ -346,6 +348,31 @@ class HotkeyListener(QObject):
         if self.registration_error == message:
             self.registrationFailed.emit(message)
 
+    def _hotkey_window_handle(self) -> int | None:
+        """A hidden window of our own for WM_HOTKEY to be sent to.
+
+        Registered against no window, the message goes to the thread's queue,
+        and native modal loops (file dialogs, moving a window) drop messages
+        that have no window, so presses during them were lost. Sent to a
+        window, it reaches Qt's window procedure and the native event filter
+        from any loop. None (the thread queue) if no window can be made.
+        """
+        if self._hotkey_window is None:
+            try:
+                from PyQt6.QtGui import QGuiApplication, QWindow
+
+                # A window needs a GUI application; a bare core app (tests,
+                # tools) uses the thread queue instead.
+                if not isinstance(QCoreApplication.instance(), QGuiApplication):
+                    return None
+                window = QWindow()
+                window.create()
+                self._hotkey_window = window
+            except Exception:
+                log.warning("Could not create the hotkey window", exc_info=True)
+                return None
+        return int(self._hotkey_window.winId())
+
     def _register_native(self, parsed: Hotkey) -> bool:
         app = QCoreApplication.instance()
         if app is None:
@@ -354,7 +381,8 @@ class HotkeyListener(QObject):
             user32 = _user32()
             hotkey_id = HotkeyListener._next_id
             HotkeyListener._next_id = HotkeyListener._next_id % 0xBFFF + 1
-            if not user32.RegisterHotKey(None, hotkey_id, parsed.register_flags, parsed.vk):
+            hwnd = self._hotkey_window_handle()
+            if not user32.RegisterHotKey(hwnd, hotkey_id, parsed.register_flags, parsed.vk):
                 import ctypes
 
                 log.info("RegisterHotKey failed for %s (error %s)", parsed.display(), ctypes.get_last_error())
@@ -363,6 +391,7 @@ class HotkeyListener(QObject):
             log.warning("RegisterHotKey unavailable", exc_info=True)
             return False
         self._native_id = hotkey_id
+        self._native_hwnd = hwnd
         self._native_filter = _WmHotkeyFilter(hotkey_id, self.on_activate)
         app.installNativeEventFilter(self._native_filter)
         return True
@@ -421,7 +450,7 @@ class HotkeyListener(QObject):
         """Stop listening for hotkey"""
         if self._native_id is not None:
             try:
-                _user32().UnregisterHotKey(None, self._native_id)
+                _user32().UnregisterHotKey(self._native_hwnd, self._native_id)
             except Exception:
                 log.debug("UnregisterHotKey failed", exc_info=True)
             self._native_id = None

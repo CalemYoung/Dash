@@ -31,3 +31,47 @@ class SettingsValueTypeTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class HotkeyMigrationTests(unittest.TestCase):
+    def test_the_old_default_hotkey_moves_once_and_says_so(self):
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / "settings.toml"
+            path.write_text('[general]\nhotkey = "Alt+F"\n', encoding="utf-8")
+            settings = Settings.load(path)
+            self.assertEqual(settings.general.hotkey, "Alt+Space")
+            self.assertTrue(settings.load_notices)
+
+            again = Settings.load(path)
+            self.assertEqual(again.general.hotkey, "Alt+Space")
+            self.assertFalse(again.load_notices)
+
+            # Choosing Alt+F again afterwards is respected.
+            again.general.hotkey = "Alt+F"
+            again.save(path)
+            self.assertEqual(Settings.load(path).general.hotkey, "Alt+F")
+
+    def test_other_hotkeys_are_left_alone(self):
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / "settings.toml"
+            path.write_text('[general]\nhotkey = "Ctrl+Shift+K"\n', encoding="utf-8")
+            settings = Settings.load(path)
+            self.assertEqual(settings.general.hotkey, "Ctrl+Shift+K")
+            self.assertFalse(settings.load_notices)
+
+
+class UnopenedSettingsFileTests(unittest.TestCase):
+    def test_defaults_are_never_saved_over_a_file_that_could_not_be_opened(self):
+        from unittest import mock
+
+        from src.settings import SettingsFileUnreadableError
+
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / "settings.toml"
+            path.write_text('[general]\nhotkey = "Ctrl+Shift+K"\n', encoding="utf-8")
+            with mock.patch.object(Path, "open", side_effect=PermissionError("locked")):
+                settings = Settings.load(path)
+            self.assertTrue(settings.read_failed)
+            with self.assertRaises(SettingsFileUnreadableError):
+                settings.save(path)
+            self.assertIn("Ctrl+Shift+K", path.read_text(encoding="utf-8"))
