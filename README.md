@@ -29,7 +29,7 @@
 - **Already open? Switch to it:** Opening an app that is running brings its window forward rather than starting a second copy.
 - **Quick calculations:** Work out sums like `12*8`, `200+15%` or `sqrt(2)` where you type; Enter copies the answer.
 - **More than open:** Right-click a result (or use the keys below) to run it as administrator, open its folder, copy its path or open a new copy.
-- **Add from anywhere:** Copy a file or folder in Explorer and press `Ctrl+V` in Dash, or drop a file, shortcut or link on it, to make it a command. Type something that matches nothing and Dash offers to add it.
+- **Add from anywhere:** Copy a file or folder in Explorer and press `Ctrl+V` in Dash, drop a file, shortcut or link on it, or turn on "Add to Dash" in File Explorer's right-click menu, to make it a command. Type something that matches nothing and `Ctrl+N` adds it, with what you typed already filled in.
 - **Icons you pick:** Every command gets one on its own, and you can swap in a library glyph or your own image, recolor it, or go back to the one Dash found.
 - **Take it with you:** Export commands to a portable file and import them on another PC, icons and all.
 - **Made to fit:** Light, dark or system theme, size, hotkeys, the display Dash opens on, the browser websites use, the web search engine, text sizes, the clock and the update check are all settings.
@@ -104,17 +104,25 @@ targets are other commands, and it opens them in the order they are listed.
 | `Ctrl+Shift+Enter` | Run the selected app as administrator |
 | `Alt+Enter` | Open the folder that holds the selected command |
 | Right-click, or the `Menu` key | More actions for the selected result |
-| `Ctrl+N` | Add a new command |
+| `Ctrl+N` | Add a new command, starting from what you typed |
 | `Ctrl+,` | Open Settings |
 | `Esc` | Close Dash |
 
 The hotkey and the three `Ctrl` shortcuts are yours to change under Settings.
+The keyboard icon at the bottom right of the launcher lists every key: hover
+over it, or click it.
 
 ## Beyond opening things
 
-- **Nothing matches?** Dash offers to add what you typed as a new command.
-  Turn on "Web search unknown commands" in Settings to also offer a web
-  search for it, first in the list.
+- **Nothing matches?** Dash says so. Press `Ctrl+N` to add what you typed as
+  a new command, already filled in; `Enter` does nothing, so a mistyped name
+  never opens the editor by accident. Turn on "Web search unknown commands"
+  in Settings to also offer a web search for it, first in the list.
+- **Add to Dash from File Explorer.** An optional "Add to Dash" item in the
+  right-click menu of files, folders and shortcuts opens the new-command
+  editor with that item filled in. It is off by default: tick it in the
+  installer or turn it on under Settings. On Windows 11 it is under "Show
+  more options".
 - **Groups carry on.** A target that has been deleted or will not open is
   reported when the group finishes, rather than stopping the ones after it.
 - **Switch instead of relaunch.** If an app's window is already open, Dash
@@ -144,8 +152,9 @@ Or by hand:
 
 1. Download `DashSetup-<version>.exe` from the
    [Releases page](https://github.com/CalemYoung/Dash/releases).
-2. Run the installer and choose whether Dash should create a desktop shortcut
-    or start when you sign in.
+2. Run the installer and choose whether Dash should create a desktop shortcut,
+    start when you sign in, or add "Add to Dash" to File Explorer's
+    right-click menu.
 3. Press `Alt+Space` to open Dash.
 
 Until you have added a command, opening Dash shows two rows: "Find recommended

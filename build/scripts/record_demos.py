@@ -144,8 +144,15 @@ def write_config():
     # not cover is blank space on the page. Three rows is enough to show a
     # list narrowing without making every other frame pay for five.
     settings_text = settings_text.replace("max_results = 20", "max_results = 3")
+    # The recording window never has focus, and a launcher that hides when
+    # it loses focus would vanish mid-scene and drop the rest of the typing.
+    settings_text = settings_text.replace("hide_when_focus_lost = true", "hide_when_focus_lost = false")
     settings_path = config / "settings.toml"
     settings_path.write_text(settings_text, encoding="utf-8")
+    # Not a first run: no first-start notice, and the footer shows the key
+    # hints rather than the one-time tips.
+    for marker in ("first_start_shown", "first_tips_shown"):
+        (config / marker).write_text("shown", encoding="utf-8")
     commands_path = config / "commands.toml"
     commands_path.write_text(DEMO_COMMANDS, encoding="utf-8")
     return settings_path, commands_path

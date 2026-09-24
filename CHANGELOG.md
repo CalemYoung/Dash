@@ -6,6 +6,8 @@ All notable changes to Dash are listed here. The format follows
 
 ## [Unreleased]
 
+## [2.10.1] - 2026-09-24
+
 ### Added
 
 - Light, dark and "follow Windows" themes.
@@ -85,5 +87,6 @@ All notable changes to Dash are listed here. The format follows
 See [GitHub Releases](https://github.com/CalemYoung/Dash/releases) for the
 notes on each earlier version.
 
-[Unreleased]: https://github.com/CalemYoung/Dash/compare/v2.10.0...HEAD
+[Unreleased]: https://github.com/CalemYoung/Dash/compare/v2.10.1...HEAD
+[2.10.1]: https://github.com/CalemYoung/Dash/compare/v2.10.0...v2.10.1
 [2.10.0]: https://github.com/CalemYoung/Dash/releases/tag/v2.10.0
