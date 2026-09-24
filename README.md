@@ -21,7 +21,7 @@
 
 ## Features
 
-- **Instant access:** Open Dash from anywhere with the global `Alt+Space` hotkey (change it under Settings).
+- **Instant access:** Open Dash from anywhere with a global hotkey: `Alt+Space` on new installs (earlier versions used `Alt+F`, which upgrades keep). Change it under Settings.
 - **Flexible commands:** Launch applications, files, folders, websites, Store apps and Windows Settings pages from one search box, with optional arguments and a start-in folder for apps.
 - **Aliases:** Add the terms you naturally type, so `gh` can open GitHub and `mail` your inbox.
 - **Site search:** Put `{query}` in a website's address and `gh dash` searches it, while `gh` on its own still opens the site.

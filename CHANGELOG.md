@@ -33,9 +33,8 @@ All notable changes to Dash are listed here. The format follows
 
 - The default hotkey is now `Alt+Space`. Dash registers it with Windows
   (`RegisterHotKey`), so the key press no longer reaches the app that had
-  focus. If you still had the old default, `Alt+F`, it moves to `Alt+Space`
-  once (with a tray notice), so `Alt+F` opens File menus again; any other
-  hotkey you chose is kept.
+  focus. This is the default for new installs only; an existing install
+  keeps the hotkey it already has, `Alt+F` included.
 - The launcher hides when it loses focus.
 - Calculator results are friendlier (rounding, large and small numbers), and
   expressions are evaluated more safely.

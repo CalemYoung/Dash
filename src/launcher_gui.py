@@ -1233,12 +1233,7 @@ class MainWindow(QMainWindow):
 
     def show_load_warnings(self):
         """Show, once, what went wrong loading settings or commands (a
-        damaged file set aside, entries left out), then forget it. Friendly
-        upgrade notes (a moved hotkey) go to the tray instead."""
-        notices = getattr(self.settings, "load_notices", None)
-        if notices:
-            self.show_tray_notice("Dash", " ".join(notices), warning=False)
-            notices.clear()
+        damaged file set aside, entries left out), then forget it."""
         warnings: list[str] = []
         for source in (self.settings, self.cmd_manager):
             pending = getattr(source, "load_warnings", None)

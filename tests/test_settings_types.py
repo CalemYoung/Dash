@@ -33,31 +33,14 @@ if __name__ == "__main__":
     unittest.main()
 
 
-class HotkeyMigrationTests(unittest.TestCase):
-    def test_the_old_default_hotkey_moves_once_and_says_so(self):
-        with tempfile.TemporaryDirectory() as folder:
-            path = Path(folder) / "settings.toml"
-            path.write_text('[general]\nhotkey = "Alt+F"\n', encoding="utf-8")
-            settings = Settings.load(path)
-            self.assertEqual(settings.general.hotkey, "Alt+Space")
-            self.assertTrue(settings.load_notices)
-
-            again = Settings.load(path)
-            self.assertEqual(again.general.hotkey, "Alt+Space")
-            self.assertFalse(again.load_notices)
-
-            # Choosing Alt+F again afterwards is respected.
-            again.general.hotkey = "Alt+F"
-            again.save(path)
-            self.assertEqual(Settings.load(path).general.hotkey, "Alt+F")
-
-    def test_other_hotkeys_are_left_alone(self):
-        with tempfile.TemporaryDirectory() as folder:
-            path = Path(folder) / "settings.toml"
-            path.write_text('[general]\nhotkey = "Ctrl+Shift+K"\n', encoding="utf-8")
-            settings = Settings.load(path)
-            self.assertEqual(settings.general.hotkey, "Ctrl+Shift+K")
-            self.assertFalse(settings.load_notices)
+class ExistingHotkeyTests(unittest.TestCase):
+    def test_a_hotkey_already_chosen_is_kept(self):
+        # Only new installs get the new default; an existing Alt+F stays.
+        for hotkey in ("Alt+F", "Ctrl+Shift+K"):
+            with self.subTest(hotkey=hotkey), tempfile.TemporaryDirectory() as folder:
+                path = Path(folder) / "settings.toml"
+                path.write_text(f'[general]\nhotkey = "{hotkey}"\n', encoding="utf-8")
+                self.assertEqual(Settings.load(path).general.hotkey, hotkey)
 
 
 class UnopenedSettingsFileTests(unittest.TestCase):
