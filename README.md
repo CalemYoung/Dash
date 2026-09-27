@@ -21,13 +21,13 @@
 
 ## Features
 
-- **Instant access:** Open Dash from anywhere with a global hotkey: `Alt+Space` on new installs (earlier versions used `Alt+F`, which upgrades keep). Change it under Settings.
+- **Instant access:** Open Dash from anywhere with a global hotkey: `Alt+Space` (configure in settings).
 - **Flexible commands:** Launch applications, files, folders, websites, Store apps and Windows Settings pages from one search box, with optional arguments and a start-in folder for apps.
 - **Aliases:** Add the terms you naturally type, so `gh` can open GitHub and `mail` your inbox.
 - **Site search:** Put `{query}` in a website's address and `gh dash` searches it, while `gh` on its own still opens the site.
 - **Groups:** One command that opens several others, in order, so a project's apps, folders and tabs start together.
-- **Already open? Switch to it:** Opening an app that is running brings its window forward rather than starting a second copy.
 - **Quick calculations:** Work out sums like `12*8`, `200+15%` or `sqrt(2)` where you type; Enter copies the answer.
+- **Already open? Switch to it:** Opening an app that is running brings its window forward rather than starting a second copy.
 - **More than open:** Right-click a result (or use the keys below) to run it as administrator, open its folder, copy its path or open a new copy.
 - **Add from anywhere:** Copy a file or folder in Explorer and press `Ctrl+V` in Dash, drop a file, shortcut or link on it, or turn on "Add to Dash" in File Explorer's right-click menu, to make it a command. Type something that matches nothing and `Ctrl+N` adds it, with what you typed already filled in.
 - **Icons you pick:** Every command gets one on its own, and you can swap in a library glyph or your own image, recolor it, or go back to the one Dash found.
@@ -37,9 +37,8 @@
 ## Why another launcher?
 
 Dash came out of using launchers that index everything on the machine. They
-lagged while typing, and now and then the results reordered between one
-keystroke and the next, so typing fast and hitting Enter opened the wrong
-thing.
+lagged while typing, and being non-deterministic can mean searching for the
+correct result in a list. With Dash you only get what you expect.
 
 Dash does less on purpose:
 
@@ -50,22 +49,19 @@ Dash does less on purpose:
 - **Predictable matching.** Results are prefix matches on names and aliases,
   followed by names with a later word that starts with what you typed (so
   `code` finds Visual Studio Code). The same letters always narrow to the
-  same commands, an exact name or alias always comes first, and the rest
-  follow a rule you pick (alphabetical or most used) rather than a relevance
-  score that shifts as you type.
-- **Nothing between you and the command.** No plugins, no file search, and no
-  web results unless you switch them on. Open, type, Enter.
+  same commands, an exact name or alias always comes first.
+- **Nothing between you and the command.** simply open, type and Enter.
 
-If you want a launcher that searches your files and the web, there are good
-ones. Dash is for when you already know what you are going to type.
+If you want a launcher that acts a search tool across all your files, there are many
+good options (flow launcher, everything, powertoys). Dash is for those who want
+a simple deterministic launcher containing only the commands you set.
 
 ## See Dash in action
 
 ### Search and launch
 
 Type a few letters and the name completes inline. The results are only ever
-the commands that still match, so the list shrinks as you type. Aliases work
-the same way, and an expression is worked out where you type it.
+the commands that still match, so the list shrinks as you type.
 
 <p align="left">
    <img src="assets/launcher-search.gif" alt="Typing into Dash: s narrows the list and completes to Spotify, the alias gh finds GitHub, and 12*8 shows 96" width="600">
@@ -108,13 +104,13 @@ targets are other commands, and it opens them in the order they are listed.
 | `Ctrl+,` | Open Settings |
 | `Esc` | Close Dash |
 
-The hotkey and the three `Ctrl` shortcuts are yours to change under Settings.
+The hotkey and the three `Ctrl` shortcuts are configurable under Settings.
 The keyboard icon at the bottom right of the launcher lists every key: hover
 over it, or click it.
 
 ## Beyond opening things
 
-- **Nothing matches?** Dash says so. Press `Ctrl+N` to add what you typed as
+- **Nothing matches?** Press `Ctrl+N` to add what you typed as
   a new command, already filled in; `Enter` does nothing, so a mistyped name
   never opens the editor by accident. Turn on "Web search unknown commands"
   in Settings to also offer a web search for it, first in the list.
