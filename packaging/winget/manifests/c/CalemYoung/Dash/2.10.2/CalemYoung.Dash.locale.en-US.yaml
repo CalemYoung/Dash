@@ -1,6 +1,6 @@
 # yaml-language-server: $schema=https://aka.ms/winget-manifest.defaultLocale.1.6.0.schema.json
 PackageIdentifier: CalemYoung.Dash
-PackageVersion: 2.10.0
+PackageVersion: 2.10.2
 PackageLocale: en-US
 Publisher: Calem Young
 PublisherUrl: https://github.com/CalemYoung
@@ -24,6 +24,6 @@ Tags:
 - hotkey
 - keyboard
 - open-source
-ReleaseNotesUrl: https://github.com/CalemYoung/Dash/releases/tag/v2.10.0
+ReleaseNotesUrl: https://github.com/CalemYoung/Dash/releases/tag/v2.10.2
 ManifestType: defaultLocale
 ManifestVersion: 1.6.0
