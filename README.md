@@ -60,8 +60,7 @@ a simple deterministic launcher containing only the commands you set.
 
 ### Search and launch
 
-Type a few letters and the name completes inline. The results are only ever
-the commands that still match, so the list shrinks as you type.
+Type a few letters and the name completes inline.
 
 <p align="left">
    <img src="assets/launcher-search.gif" alt="Typing into Dash: s narrows the list and completes to Spotify, the alias gh finds GitHub, and 12*8 shows 96" width="600">
