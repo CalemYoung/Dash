@@ -12,7 +12,6 @@ ProductCode: '{88DC9BD4-16FC-452E-87DD-4B0F54603ED1}}_is1'
 AppsAndFeaturesEntries:
 - DisplayName: Dash
   Publisher: Calem Young
-  DisplayVersion: 2.10.2
   ProductCode: '{88DC9BD4-16FC-452E-87DD-4B0F54603ED1}}_is1'
 ReleaseDate: 2026-09-24
 Installers:
