@@ -107,34 +107,6 @@ The hotkey and the three `Ctrl` shortcuts are configurable under Settings.
 The keyboard icon at the bottom right of the launcher lists every key: hover
 over it, or click it.
 
-## Beyond opening things
-
-- **Nothing matches?** Press `Ctrl+N` to add what you typed as
-  a new command, already filled in; `Enter` does nothing, so a mistyped name
-  never opens the editor by accident. Turn on "Web search unknown commands"
-  in Settings to also offer a web search for it, first in the list.
-- **Add to Dash from File Explorer.** An optional "Add to Dash" item in the
-  right-click menu of files, folders and shortcuts opens the new-command
-  editor with that item filled in. It is off by default: tick it in the
-  installer or turn it on under Settings. On Windows 11 it is under "Show
-  more options".
-- **Groups carry on.** A target that has been deleted or will not open is
-  reported when the group finishes, rather than stopping the ones after it.
-- **Switch instead of relaunch.** If an app's window is already open, Dash
-  brings it forward rather than starting it again. Turn it off under Settings
-  if you would rather always start a fresh copy.
-- **Icons.** Every command gets an icon without you doing anything: the app's
-  own icon, the site's favicon, or a default for its kind. Click the icon in
-  the editor to replace it with one of the 5,000-odd Tabler glyphs or an image
-  from disk, and recolor either. "Use default icon" drops yours and goes back
-  to the one Dash found.
-- **Usage history.** Dash counts how often you open each command so "most used
-  first" can order the results. Show the counts, or clear the history, under
-  Settings.
-- **Move your commands.** Export any selection of commands to a portable file
-  and import it elsewhere. Paths under your home folder travel as `~`, and
-  custom icons go with them.
-
 ## Install
 
 With winget (once the package is listed in the winget catalog):
