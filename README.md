@@ -109,7 +109,7 @@ over it, or click it.
 
 ## Install
 
-With winget (once the package is listed in the winget catalog):
+With winget:
 
 ```powershell
 winget install --id CalemYoung.Dash -e
