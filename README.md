@@ -112,8 +112,11 @@ over it, or click it.
 With winget:
 
 ```powershell
-winget install --id CalemYoung.Dash -e
+winget install -e dash
 ```
+
+The `-e` is needed because a plain `winget install dash` also matches an
+unrelated Microsoft Store app. `winget install CalemYoung.Dash` works too.
 
 Or by hand:
 
