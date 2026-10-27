@@ -132,16 +132,8 @@ bar of any browser it finds. It also offers the websites most people want,
 Google, YouTube, Gmail, Maps, Wikipedia and the rest, with their search links
 already filled in, so `g` opens Google and `g dash` searches it.
 
-They arrive on a tab each, for apps and tools, folders, websites and Windows
-Settings, with a filter box, so you can go through them a kind at a time. The
-pencil on a row opens it in the editor first, to rename it or change its icon
-before it is added. Programs you have opened recently start ticked, and each
-comes with short aliases you can edit, so `word` finds Microsoft Word and `vsc`
-finds Visual Studio Code. Nothing is added until you choose it, and you can
-run the scan again any time from Settings.
-
 To tidy up later, open Settings and choose "Manage Commands..." to see,
-edit or delete every command at once.
+edit or delete every command at once
 
 Settings opens from the launcher: press `Ctrl+,`, or type "settings". The
 system tray menu can also open Dash and Settings, and holds the app itself:
