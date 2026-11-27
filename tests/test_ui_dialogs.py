@@ -40,25 +40,30 @@ class TestUIDialogs(unittest.TestCase):
         self.settings_path = root / "settings.toml"
         self.icon_manager = IconManager(self.settings)
 
-    def test_settings_editor_dirty_state(self):
+    def test_settings_save_each_change_as_it_is_made(self):
+        from PyQt6.QtTest import QTest
+
         panel = SettingsEditorPanel(self.settings, self.settings_path)
-        # Initially clean: Close button should not be hidden, Save and Cancel hidden
+        saved = []
+        panel.saved.connect(saved.append)
         self.assertFalse(panel.close_button.isHidden())
-        self.assertTrue(panel.cancel_button.isHidden())
-        self.assertTrue(panel.save_button.isHidden())
-
-        # Modify a setting (e.g. search font size)
-        panel._controls["ui.search_font_size"].setValue(panel._controls["ui.search_font_size"].value() + 1)
-        # Now dirty: Close button should be hidden, Save and Cancel visible
-        self.assertTrue(panel.close_button.isHidden())
-        self.assertFalse(panel.cancel_button.isHidden())
-        self.assertFalse(panel.save_button.isHidden())
-
-        # Revert change back
-        panel._controls["ui.search_font_size"].setValue(panel._controls["ui.search_font_size"].value() - 1)
-        self.assertFalse(panel.close_button.isHidden())
-        self.assertTrue(panel.cancel_button.isHidden())
-        self.assertTrue(panel.save_button.isHidden())
+        size = panel._controls["ui.search_font_size"]
+        size.setValue(size.value() + 1)
+        self.assertEqual(saved, [], "a number saves when its field is left, not on every step")
+        size.editingFinished.emit()
+        QTest.qWait(10)
+        self.assertEqual(len(saved), 1)
+        self.assertEqual(saved[0].ui.search_font_size, size.value())
+        self.assertTrue(self.settings_path.exists())
+        autocomplete = panel._controls["search.autocomplete"]
+        autocomplete.toggle()
+        QTest.qWait(10)
+        self.assertEqual(len(saved), 2, "a tick saves at once")
+        closed = []
+        panel.closed.connect(lambda: closed.append(True))
+        panel._cancel()
+        self.assertEqual(closed, [True])
+        self.assertEqual(len(saved), 2, "closing with nothing new saves nothing more")
 
     def test_command_editor_dirty_state(self):
         cmd_manager = CommandManager(self.commands_path, self.settings)

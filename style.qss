@@ -109,6 +109,28 @@ ResultRow[selected="true"] #ResultIconTile {
     color: {{description_text}};
 }
 
+/* Fallback rows are offers to add something, not results: a bare icon with
+   no tile, a plain title, and no hover highlight (the row paints over it),
+   against a command's filled tile and bold name. Selecting one with the
+   arrow keys still shows. */
+ResultRow[fallback="true"] {
+    background-color: {{results_bg}};
+    border-radius: 7px;
+}
+
+ResultRow[fallback="true"][selected="true"] {
+    background-color: {{row_selected_bg}};
+}
+
+ResultRow[fallback="true"] #ResultIconTile,
+ResultRow[fallback="true"][selected="true"] #ResultIconTile {
+    background-color: transparent;
+}
+
+ResultRow[fallback="true"] #ResultCommandLabel {
+    font-weight: normal;
+}
+
 /* Usage count: a quiet pill that reads as metadata, not as a third text line. */
 #ResultRunCounterLabel {
     color: {{pill_text}};
@@ -408,6 +430,9 @@ QPushButton#programImportSelectButton:hover {
    reaches shows where it is. */
 #CommandEditorPanel QPushButton:focus,
 #homePanel QPushButton:focus,
+#SettingsEditorPanel QPushButton:focus,
+QDialog#ProgramImportDialog QPushButton:focus,
+QDialog#ProgramImportDialog QToolButton:focus,
 QDialog#IconStyleDialog QPushButton:focus,
 QDialog#LibraryPickerDialog QPushButton:focus,
 #CommandEditIcon:focus,
@@ -418,6 +443,8 @@ QLabel#iconPreview:focus {
 
 #CommandEditorPanel QPushButton:default:focus,
 #homePanel QPushButton:default:focus,
+#SettingsEditorPanel QPushButton:default:focus,
+QDialog#ProgramImportDialog QPushButton:default:focus,
 QDialog#IconStyleDialog QPushButton:default:focus,
 QDialog#LibraryPickerDialog QPushButton:default:focus {
     border: 1px solid {{accent_text}};
@@ -558,6 +585,12 @@ QLineEdit {
 
 QLineEdit:focus {
     border: 1px solid {{accent}};
+}
+
+/* A shortcut field waiting for the new keys: a thicker ring than focus alone. */
+HotkeyLineEdit[recording="true"] {
+    border: 2px solid {{accent}};
+    padding: 7px 9px;
 }
 
 QCheckBox {

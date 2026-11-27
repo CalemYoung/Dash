@@ -90,7 +90,8 @@ class SettingsPanelTests(unittest.TestCase):
     def test_it_starts_clean_with_the_defaults(self):
         panel = self._panel()
         self.assertFalse(panel._is_dirty())
-        self.assertTrue(panel.save_button.isHidden())
+        self.assertFalse(panel._commit(), "nothing to save")
+        self.assertFalse(hasattr(panel, "save_button"), "changes save themselves")
 
     def test_it_starts_clean_with_unusual_stored_values(self):
         self.settings.general.web_search = "http://google.com/search?q={query}"
@@ -130,12 +131,14 @@ class SettingsPanelTests(unittest.TestCase):
 
         panel._web_search_custom.setText("example.com/?s={query}")
         self.assertTrue(_row_visible(panel._web_search_problem))
-        self.assertFalse(panel.save_button.isEnabled())
+        self.assertFalse(panel._commit(), "an address that won't work is not saved")
+        self.assertFalse(self.settings_path.exists())
 
         panel._web_search_custom.setText("https://example.com/?s={query}")
         self.assertFalse(_row_visible(panel._web_search_problem))
-        self.assertTrue(panel.save_button.isEnabled())
         self.assertEqual(panel._collect().general.web_search, "https://example.com/?s={query}")
+        self.assertTrue(panel._commit())
+        self.assertIn("https://example.com/?s={query}", self.settings_path.read_text(encoding="utf-8"))
 
     def test_a_size_choice_sets_every_size_and_hides_the_pixel_boxes(self):
         panel = self._panel()

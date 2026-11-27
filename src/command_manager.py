@@ -15,6 +15,7 @@ from .child_process import clean_dll_search
 from .command_trie import CommandTrie, WordStartIndex
 from .fileio import atomic_write_text, quarantine_file
 from .icon_manager import command_source_icon_path
+from .instant_aliases import check_instant_aliases
 from .installed_programs import (
     SAFE_LINK_SCHEMES,
     _path_key,
@@ -112,7 +113,7 @@ def _entry_problem(entry) -> str | None:
     for key in ("location", "description", "type", "icon", "browser", *ICON_RECIPE_KEYS, *LAUNCH_KEYS):
         if entry.get(key) is not None and not isinstance(entry[key], str):
             return f"its {key.replace('_', ' ')} is not text"
-    for key in ("aliases", "targets"):
+    for key in ("aliases", "targets", "instant_aliases"):
         value = entry.get(key)
         if value is not None and not (isinstance(value, list) and all(isinstance(item, str) for item in value)):
             return f"its {key} are not a list of text"
@@ -142,11 +143,19 @@ class CommandManager:
         self.settings = settings
         self.commands = {}
         self.lookup_trie = CommandTrie()
+        # Called with [(alias, its command, the command that starts with it)]
+        # when a saved or added command stops an alias opening instantly.
+        self.on_instant_demoted = None
+        # (owner, normalized alias) -> the command whose name or alias starts
+        # with that alias, keeping it from opening instantly.
+        self._instant_blocked_by: dict[tuple[str, str], str] = {}
         # Commands by the start of any later word of their name ("code" for
         # Visual Studio Code), for the match_word_starts setting.
         self.word_index = WordStartIndex()
         # Every name and alias, as the trie compares them, to its command.
         self.keyword_index: dict[str, str] = {}
+        # Instant aliases that passed the check, as the trie compares them, to their command.
+        self.instant_index: dict[str, str] = {}
         # Plain-language notes about problems met while loading commands.toml
         # (an unreadable file set aside, entries or aliases left out) for the
         # GUI to show. Nothing here stops Dash starting; the GUI clears the
@@ -584,8 +593,6 @@ class CommandManager:
                 return f"'{str(keyword).strip()}' is already used by '{owner}'."
         return None
 
-    # ---------------------------------------------------------------- editing
-
     def save_command(self, command: dict, original_name: str | None = None):
         """Insert or update a user command in commands.toml, then reload the trie.
 
@@ -595,6 +602,7 @@ class CommandManager:
         error = self.validate_command(command, original_name)
         if error:
             raise ValueError(error)
+        instant_before = dict(self.instant_index)
 
         commands = self._read_raw_commands(for_saving=True)
         match_name = original_name or command.get("name")
@@ -648,6 +656,7 @@ class CommandManager:
 
         self._write_raw_commands(commands)
         self.reload_command_trie()
+        self._say_lost_instant(instant_before)
 
     def delete_command(self, name: str):
         """Remove a user command from commands.toml, then reload the trie."""
@@ -665,6 +674,19 @@ class CommandManager:
         candidates, and ones an earlier candidate has. Suggested aliases are
         a convenience, so a clash costs the alias, never the command."""
         return drop_clashing_aliases(candidates, set(self._reserved_keywords()))
+
+    def keepable_aliases(self, candidate: dict) -> list[str]:
+        """The candidate's suggested aliases that adding it would keep: those
+        no command already uses as a name or alias."""
+        reserved = self._reserved_keywords(commands=list(self.commands.values()))
+        name_key = str(candidate.get("name", "")).strip().casefold()
+        kept: list[str] = []
+        for alias in candidate.get("aliases") or []:
+            text = str(alias).strip()
+            key = text.casefold()
+            if key and key != name_key and key not in reserved and key not in {a.casefold() for a in kept}:
+                kept.append(text)
+        return kept
 
     def import_program_commands(self, candidates: list[dict]) -> dict:
         """Append selected program candidates without changing existing commands.
@@ -725,8 +747,10 @@ class CommandManager:
             imported.append(candidate["name"])
 
         if imported:
+            instant_before = dict(self.instant_index)
             self._write_raw_commands(commands)
             self.reload_command_trie()
+            self._say_lost_instant(instant_before)
 
         return {
             "imported": imported,
@@ -962,8 +986,10 @@ class CommandManager:
             imported.append(name)
 
         if imported:
+            instant_before = dict(self.instant_index)
             self._write_raw_commands(commands)
             self.reload_command_trie()
+            self._say_lost_instant(instant_before)
 
         return {"imported": imported, "skipped": skipped, "candidate_count": len(candidates)}
 
@@ -1055,10 +1081,58 @@ class CommandManager:
         for keyword, command_name in keyword_to_command.items():
             self.lookup_trie.insert(keyword, command_name)
         self.keyword_index = {self.lookup_trie.normalize(str(keyword)): name for keyword, name in keyword_to_command.items()}
+        self._build_instant_index(commands)
         self.word_index = WordStartIndex(case_sensitive=case_sensitive)
         self.word_index.build((str(command["name"]), name) for name, command in commands.items())
 
     # -------------------------------------------------------------- searching
+
+    def _build_instant_index(self, commands: dict) -> None:
+        """Every alias opens its command as soon as it is typed, when the
+        instant_aliases setting is on and no other name or alias starts with
+        the same letters (see check_instant_aliases). Nothing is stored: a
+        command saved later that starts with an alias makes it need Enter."""
+        self.instant_index = {}
+        self._instant_blocked_by = {}
+        if not getattr(self.settings.search, "instant_aliases", False):
+            return
+        self.instant_index, refused = check_instant_aliases(
+            ({**command, "instant_aliases": list(command.get("aliases") or [])} for command in commands.values()),
+            self.lookup_trie.normalize,
+            bool(getattr(self.settings.search, "match_word_starts", False)),
+        )
+        for conflict in refused:
+            if conflict.keyword_owner:
+                self._instant_blocked_by[(conflict.owner, self.lookup_trie.normalize(conflict.alias))] = conflict.keyword_owner
+
+    def _say_lost_instant(self, before: dict[str, str]) -> None:
+        """Tell `on_instant_demoted` about aliases that opened instantly in
+        `before` and now need Enter because another command starts with them."""
+        notes = []
+        for alias_key, owner in before.items():
+            if alias_key in self.instant_index or owner not in self.commands:
+                continue
+            by = self._instant_blocked_by.get((owner, alias_key))
+            if not by or by == owner:
+                continue
+            alias = next(
+                (str(text) for text in self.commands[owner].get("aliases") or [] if self.lookup_trie.normalize(str(text)) == alias_key),
+                alias_key,
+            )
+            logger.info("'%s' of %s needs Enter now: %s starts with it", alias, owner, by)
+            notes.append((alias, owner, by))
+        if notes and self.on_instant_demoted is not None:
+            self.on_instant_demoted(notes)
+
+    def is_instant(self, command_name: str, alias: str) -> bool:
+        """Whether typing `alias` opens `command_name` without Enter."""
+        return self.instant_index.get(self.lookup_trie.normalize(str(alias))) == command_name
+
+    def instant_command(self, text: str) -> str | None:
+        """The command an instant alias opens when `text` is exactly that alias."""
+        if not text:
+            return None
+        return self.instant_index.get(self.lookup_trie.normalize(text))
 
     def _is_exact_match(self, command: dict, text: str) -> bool:
         """True if `text` is the whole of the command's name or one of its aliases."""
@@ -1131,6 +1205,25 @@ class CommandManager:
         search_row = {**command, "_query": query}
         return (results[:position] + [search_row] + results[position:] + word_matches)[:max_results]
 
+    def only_match(self, text: str) -> str | None:
+        """The one command `text` matches, counting every match (not just
+        the `max_results` shown), or None when there are none or several.
+        A search site is never it, nor is a search being typed after one:
+        those wait for the rest of what to search for."""
+        text = str(text or "")
+        if not text.strip() or self.match_search_keyword(text) is not None:
+            return None
+        names = {name for name in self.lookup_trie.search_prefix(text, max_results=None) if name in self.commands}
+        if getattr(self.settings.search, "match_word_starts", False):
+            names |= {name for name in self.word_index.search_prefix(text) if name in self.commands}
+        if len(names) != 1:
+            return None
+        name = names.pop()
+        command = self.commands[name]
+        if command.get("type") == "url" and is_search_link(str(command.get("location", ""))):
+            return None
+        return name
+
     def match_search_keyword(self, text: str) -> tuple[dict, str] | None:
         """``(command, query)`` when the text is a search keyword, a space,
         and what to search for; None otherwise.
@@ -1154,6 +1247,19 @@ class CommandManager:
         return results
 
     # -------------------------------------------------------------- execution
+
+    def open_candidate(self, main_window: "MainWindow", candidate: dict) -> str | None:
+        """Open something found on this PC that is not a command (a fallback
+        result). It is not counted, since run counts belong to commands.
+        None on success, otherwise the reason it failed."""
+        location = str(candidate.get("location") or "")
+        cmd_type = candidate.get("type") or ("url" if location.startswith(("http://", "https://")) else "file")
+        if cmd_type not in ("file", "url"):
+            return "Only apps, files, folders and websites can be opened from here."
+        cmd = {**candidate, "type": cmd_type, "location": location}
+        if cmd_type == "file" and location and not is_link_location(location):
+            cmd["_path"] = Path(location).expanduser()
+        return self._launch(main_window, cmd, None, {str(candidate.get("name", ""))})
 
     def execute_command(
         self,

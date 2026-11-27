@@ -65,6 +65,8 @@ targets = ["GitHub", "Tool"]
         (self.root / "first_tips_shown").write_text("shown", encoding="utf-8")
         self.manager = CommandManager(self.commands_path, self.settings)
         self.window = MainWindow(self.manager, self.settings, settings_path=self.root / "settings.toml")
+        # Nothing found on this PC: misses show only their own rows (test_fallback covers the rest).
+        self.window.fallback_index.set_candidates([])
         self.box = self.window.search_input_widget
 
     def tearDown(self):
@@ -542,22 +544,6 @@ class SettingsWiringTests(_LauncherFixture):
         changed.general.hotkey = "Ctrl+Space"
         self.window._apply_settings(changed)
         listener.update_hotkey.assert_called_once_with("Ctrl+Space")
-
-
-class TipsTests(_LauncherFixture):
-    def test_tips_show_once_when_there_are_commands(self):
-        marker = self.root / "first_tips_shown"
-        marker.unlink()
-        self.window._tips_checked = False
-        self.window.activate_launcher()
-        self.assertFalse(self.window.tip_label.isHidden())
-        self.assertIn("Tab completes", self.window.tip_label.text())
-        self.assertTrue(marker.exists())
-        self.window.dismiss_tips()
-        self.assertTrue(self.window.tip_label.isHidden())
-        self.window._tips_checked = False
-        self.window.activate_launcher()
-        self.assertTrue(self.window.tip_label.isHidden(), "never twice")
 
 
 class DiscoveryTests(unittest.TestCase):

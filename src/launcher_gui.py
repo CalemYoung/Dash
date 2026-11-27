@@ -4,6 +4,7 @@ from PyQt6.QtWidgets import QListWidget, QMessageBox, QSystemTrayIcon, QMenu, QA
 from PyQt6.QtWidgets import QGraphicsOpacityEffect, QFileDialog, QProgressDialog, QToolButton, QToolTip
 from PyQt6.QtGui import QBrush, QContextMenuEvent, QFont, QFontMetrics, QIcon, QAction, QDesktopServices, QMouseEvent, QPainter, QPen, QPixmap, QCursor, QScreen, QKeySequence, QShortcut
 from PyQt6.QtNetwork import QNetworkAccessManager, QNetworkReply, QNetworkRequest
+from PyQt6 import sip
 from .settings import Settings
 from .settings_editor import ExportCommandsDialog, ImportCommandsDialog, ManageCommandsDialog, ProgramImportDialog, SettingsEditorPanel
 from .settings_editor import delete_confirmation_text, hotkey_recording
@@ -11,6 +12,7 @@ from .window_placement import available_geometry_for, clamp_size_to_screen, move
 from .icon_manager import IconManager
 from .command_manager import CommandsFileUnreadableError
 from .command_trie import TrieSnapshot
+from .fallback import FallbackIndex, command_location_keys
 from typing import cast
 from contextlib import contextmanager
 from . import app_log, browsers, calculator, theme
@@ -30,6 +32,7 @@ import re
 import sys
 import time
 from pathlib import Path
+from urllib.parse import urlparse
 import win32gui
 import win32con
 import pyperclip
@@ -56,6 +59,9 @@ RESULTS_LIST_PADDING_V = 4
 FOCUS_GRACE_MS = 800
 # How long after a dialog closes a deactivation is still put down to it.
 DIALOG_GRACE_MS = 400
+# After an instant alias opens its command, how long the search box ignores
+# keys before the launcher hides, so fast typing does not spill elsewhere.
+INSTANT_SWALLOW_MS = 150
 # The "something went wrong" notice is shown at most this often.
 ERROR_NOTICE_INTERVAL_S = 30
 
@@ -86,6 +92,16 @@ def target_from_text(text: str) -> str | None:
     if _WINDOWS_PATH.match(text) or is_link_location(text):
         return text
     return None
+
+
+# Fallback scans still running. Holding them here keeps a scan alive past the
+# window that started it; Dash waits for them on the way out.
+_RUNNING_SCANS: set["ProgramDiscoveryThread"] = set()
+
+
+def wait_for_scans(milliseconds: int = 5000):
+    for thread in list(_RUNNING_SCANS):
+        thread.wait(milliseconds)
 
 
 class ProgramDiscoveryThread(QThread):
@@ -357,11 +373,13 @@ class MainWindow(QMainWindow):
     def __init__(self, cmd_manager, settings: Settings, settings_path: Path | None = None):
         super().__init__()
         self.cmd_manager = cmd_manager
+        cmd_manager.on_instant_demoted = self._say_instant_demoted
         self.settings = settings
         self._loaded_settings_path = settings_path
         self.user_text = ""
         self.current_suggestion = ""
         self.is_deleting = False
+        self._instant_launching = False
         self._editor_panel = None
         self._hotkey_listener = None
         self.icon_manager = IconManager(settings)
@@ -383,6 +401,15 @@ class MainWindow(QMainWindow):
         self._update_progress = None
         self._program_discovery_thread = None
         self._program_discovery_progress = None
+        # The fallback: what "Find recommended commands" finds, offered when no
+        # command matches. Scanned in the background on the first miss.
+        self.fallback_index = FallbackIndex(lambda text: self.cmd_manager.lookup_trie.normalize(text))
+        self._fallback_thread = None
+        # Set by ↓ on a miss: show what was found, until the text changes.
+        self._fallback_requested = False
+        # True while the results are the "No commands match" view.
+        self._showing_miss = False
+        self._fallback_icons: dict[str, QPixmap] = {}
         # Hide on focus loss: dialogs Dash has open (or is opening), and a
         # short window after showing or after a dialog closes, keep it open.
         self._dialog_depth = 0
@@ -392,7 +419,6 @@ class MainWindow(QMainWindow):
         self._last_error_notice = float("-inf")
         self._pending_tray_messages: list[tuple[str, str]] = []
         self._missing_screens_logged: set[str] = set()
-        self._tips_checked = False
         self._row_menu_from_key = False
         self._decimal_separator = calculator.locale_decimal_separator()
 
@@ -539,20 +565,6 @@ class MainWindow(QMainWindow):
         self.keys_hint_label.setToolTip("\n".join(self._keys_help_lines()))
         self.keys_hint_label.setAccessibleName("More keys")
         self.keys_hint_label.setAccessibleDescription("; ".join(self._keys_help_lines()))
-        # First-run tips, shown once in place of the shortcut hint.
-        self.tip_label = QLabel()
-        self.tip_label.setObjectName("ShortcutHint")
-        self.tip_label.setWordWrap(True)
-        self.tip_label.setAccessibleName("Tip")
-        self.tip_label.hide()
-        self.tip_dismiss_button = QToolButton()
-        self.tip_dismiss_button.setObjectName("ResultEditButton")
-        self.tip_dismiss_button.setText("\u00d7")
-        self.tip_dismiss_button.setToolTip("Dismiss tip")
-        self.tip_dismiss_button.setAccessibleName("Dismiss tip")
-        self.tip_dismiss_button.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.tip_dismiss_button.clicked.connect(self.dismiss_tips)
-        self.tip_dismiss_button.hide()
         self.footer_height = self._base_footer_height()
         self._search_view_size = QSize(
             self.settings.ui.program_width,
@@ -593,8 +605,6 @@ class MainWindow(QMainWindow):
         footer_layout.setContentsMargins(self._layout_margin, 0, self._layout_margin, 0)
         footer_layout.setSpacing(self._layout_spacing)
         footer_layout.addWidget(self.shortcut_hint_label, 1)
-        footer_layout.addWidget(self.tip_label, 1)
-        footer_layout.addWidget(self.tip_dismiss_button)
         footer_layout.addWidget(self.keys_hint_label)
         self.footer_widget = QWidget()
         self.footer_widget.setObjectName("LauncherFooter")
@@ -829,10 +839,9 @@ class MainWindow(QMainWindow):
         if self._editor_panel is not None:
             self.close_editor()
         self.hide()
+        self._fallback_requested = False
         self.search_input_widget.clear()
         self.user_text = ""
-        if not self.tip_label.isHidden():
-            self.dismiss_tips()
 
     def activate_launcher(self):
         was_visible = self.isVisible()
@@ -847,7 +856,6 @@ class MainWindow(QMainWindow):
         # with no commands yet surfaces its offer to scan for programs here.
         if not self.search_input_widget.text():
             self._clear_and_hide_results()
-        self._maybe_show_tips()
 
         self.adjustSize()
         self._move_to_configured_screen()
@@ -1032,9 +1040,6 @@ class MainWindow(QMainWindow):
         # Beside the config, which installs and updates leave alone.
         return self._settings_path().parent / "first_start_shown"
 
-    def _tips_marker(self) -> Path:
-        return self._settings_path().parent / "first_tips_shown"
-
     def _show_first_start_notice(self):
         """Once, on the very first start after installing: how to get back.
 
@@ -1061,48 +1066,9 @@ class MainWindow(QMainWindow):
             10000,
         )
 
-    def _tips_text(self) -> str:
-        edit = self._format_shortcut(self.settings.shortcuts.edit_selected_command)
-        return f"Tip: Tab completes  \u00b7  {edit} edits  \u00b7  right-click for more  \u00b7  type a site's name then a space to search it"
-
-    def _maybe_show_tips(self):
-        """Once, the first time the launcher opens with commands in it: the
-        keys that are easy to miss, in the footer until dismissed or closed."""
-        if self._tips_checked:
-            return
-        marker = self._tips_marker()
-        if marker.exists():
-            self._tips_checked = True
-            return
-        if not self.cmd_manager.has_user_commands():
-            return  # the empty launcher has its own offer to show first
-        self._tips_checked = True
-        try:
-            marker.parent.mkdir(parents=True, exist_ok=True)
-            marker.write_text("shown", encoding="utf-8")
-        except OSError:
-            log.warning("Could not record that the first-run tips were shown", exc_info=True)
-            return
-        self.tip_label.setText(self._tips_text())
-        self.shortcut_hint_label.hide()
-        self.tip_label.show()
-        self.tip_dismiss_button.show()
-        self._fit_footer()
-
-    def dismiss_tips(self):
-        self.tip_label.hide()
-        self.tip_dismiss_button.hide()
-        self.shortcut_hint_label.show()
-        self._fit_footer()
-
     def _fit_footer(self):
-        """The footer is one line, or as many as the tip needs while it shows."""
+        """The footer is one line, sized to its text."""
         height = self._base_footer_height()
-        if not self.tip_label.isHidden():
-            margins = self.footer_widget.layout().contentsMargins() if self.footer_widget.layout() else None
-            spare = (margins.left() + margins.right()) if margins is not None else 0
-            width = self.settings.ui.program_width - spare - self.tip_dismiss_button.sizeHint().width() - self.keys_hint_label.sizeHint().width() - 2 * self._layout_spacing
-            height = max(height, self.tip_label.heightForWidth(max(80, width)) + 10)
         self.footer_height = height
         self.footer_widget.setFixedHeight(height)
         self._sync_search_view_size()
@@ -1725,6 +1691,13 @@ class MainWindow(QMainWindow):
             error_dialog.exec()
 
     def on_text_change(self, text):
+        # What ↓ showed was for the letters it was pressed on: any edit puts
+        # the rows away again, so a miss is one quiet line until ↓ asks.
+        self._fallback_requested = False
+        if not self.is_deleting:
+            typed = self._extract_user_input(text)
+            if self._open_instant_alias(typed) or self._open_only_match(typed):
+                return
         # Early exit conditions
         if self.is_deleting or not self.settings.search.autocomplete:
             self._update_without_suggestion(text)
@@ -1747,6 +1720,56 @@ class MainWindow(QMainWindow):
             self._try_apply_suggestion(self.get_selected_command())
         else:
             self.current_suggestion = ""
+
+    def _open_instant_alias(self, typed: str) -> bool:
+        """Open the command whose instant alias is exactly what was typed.
+
+        No other name or alias starts with an instant alias (the command
+        manager makes sure), so these letters can only mean that command and
+        there is nothing to wait for. Backspacing onto one does not open it.
+        Keys typed straight after go nowhere: the box ignores them for a
+        moment before the launcher hides, rather than letting them land in
+        whichever window comes forward."""
+        name = self.cmd_manager.instant_command(typed)
+        if name is None:
+            return False
+        log.debug("Instant alias %r opens %r", typed, name)
+        return self._open_at_once(name)
+
+    def _open_only_match(self, typed: str) -> bool:
+        """With the open_only_match setting: open the command as soon as what
+        was typed matches it and nothing else. Off by default, since a
+        command can then open before its name is finished."""
+        if not self.settings.search.open_only_match:
+            return False
+        name = self.cmd_manager.only_match(typed)
+        if name is None:
+            return False
+        log.debug("%r matches only %r; opening it", typed, name)
+        return self._open_at_once(name)
+
+    def _open_at_once(self, name: str) -> bool:
+        """Open `name` without waiting for Enter, then ignore the keys typed
+        straight after for a moment, so they don't land in whichever window
+        comes forward."""
+        cmd = self.cmd_manager.commands.get(name)
+        if cmd is None or self._instant_launching:
+            return False
+        error = self.cmd_manager.execute_command(self, name)
+        if error:
+            self._show_launch_failure(cmd, error)
+            return True
+        box = self.search_input_widget
+        self._instant_launching = True
+        box.setReadOnly(True)
+
+        def finish():
+            self._instant_launching = False
+            box.setReadOnly(False)
+            self._finish_launch(cmd, None)
+
+        QTimer.singleShot(INSTANT_SWALLOW_MS, finish)
+        return True
 
     def _extract_user_input(self, full_text):
         """Extract user-typed text, excluding any selected suggestion"""
@@ -1798,6 +1821,9 @@ class MainWindow(QMainWindow):
         """Complete the box from the row the user moved to, keeping what they typed."""
         if not self.settings.search.autocomplete or not self.user_text:
             return
+        row = self.get_selected_row()
+        if row is not None and row.fallback_candidate is not None:
+            return  # "Add Clock" is an offer, not a name to complete to
         self._try_apply_suggestion(self.get_selected_command())
 
     def accept_suggestion(self):
@@ -1967,6 +1993,11 @@ class MainWindow(QMainWindow):
         if cmd is None:
             if row.copy_value is not None:
                 menu.addAction("Copy result\tCtrl+C", lambda: self._copy_and_hide(row.copy_value))
+            elif row.fallback_candidate is not None:
+                candidate = row.fallback_candidate
+                menu.setDefaultAction(menu.addAction("Add as a command...\tEnter", lambda: self.add_fallback(candidate)))
+                menu.addSeparator()
+                menu.addAction("Open without adding", lambda: self._open_fallback(candidate))
             elif row.action is not None:
                 menu.addAction("Open\tEnter", lambda: self.activate_row(row))
             else:
@@ -2066,22 +2097,35 @@ class MainWindow(QMainWindow):
         self.results_list_widget.setCurrentRow(0)
         return True
 
-    def _show_no_match_row(self, text: str) -> bool:
+    def _show_no_match_row(self, text: str, fallback: str = "", found: int = 0) -> bool:
         """Say that nothing matched, and how to add it as a command.
 
         Only for reading: it can't be selected, so it is never highlighted
         and Enter never acts on it. A mistyped name and a quick Enter should
         not open the editor; the new command shortcut does, with the typed
-        text filled in."""
+        text filled in. `fallback` says where looking on this PC stands:
+        "ready" (`found` things are waiting behind ↓), "offer" (↓ looks,
+        still scanning), "found" (rows follow), "none" (it looked and found
+        nothing) or "" (nothing to offer)."""
         text = text.strip()
         if not text:
             return False
         shortcut = self._format_shortcut(self.settings.shortcuts.new_command)
+        if fallback == "ready":
+            description = f"Press ↓ to see {found} on this PC, or {shortcut} to add your own"
+        elif fallback == "offer":
+            description = f"Press ↓ to look on this PC, or {shortcut} to add it"
+        elif fallback == "found":
+            description = f"Press ↓ to add one of these, or {shortcut} to add your own"
+        elif fallback == "none":
+            description = f"Nothing on this PC starts with that. Press {shortcut} to add it"
+        else:
+            description = f"Press {shortcut} to add it as a command"
         row = ResultRow(
             self,
             icon_path=self.settings.paths.no_result_icon,
             command=f"No commands match “{text}”",
-            description=f"Press {shortcut} to add it as a command",
+            description=description,
         )
         item = self._add_row(row)
         item.setFlags(Qt.ItemFlag.NoItemFlags)
@@ -2089,9 +2133,193 @@ class MainWindow(QMainWindow):
 
     def _show_no_results(self, text: str):
         """Nothing matched: a web search first, selected, when that setting
-        is on, then the line saying so and how to add it as a command."""
+        is on, then the line saying so and how to add it as a command, then
+        what on this PC starts with those letters.
+
+        Dash looks on this PC as soon as nothing matches, in the background,
+        but shows what it found only once the user presses ↓, so a miss stays
+        one quiet line. Fallback rows are never selected on their own, so
+        Enter can't open one by accident: Enter only ever opens a command
+        the user added."""
+        self._showing_miss = True
         self._show_web_search_row(text)
-        self._show_no_match_row(text)
+        offered = bool(self.settings.search.suggest_when_no_match and text.strip())
+        looking = offered and self._fallback_requested
+        found = self._fallback_matches(text) if offered else []
+        matches = found if looking else []
+        scanning = offered and not found and not self.fallback_index.loaded and self._fallback_thread is not None
+        if not offered:
+            state = ""
+        elif not looking:
+            state = "ready" if found else ("offer" if scanning else "")
+        elif scanning:
+            state = ""
+        else:
+            state = "found" if matches else "none"
+        self._show_no_match_row(text, fallback=state, found=len(found))
+        for candidate in matches:
+            self._add_row(self._fallback_row(candidate))
+        if looking and scanning:
+            row = ResultRow(
+                self,
+                icon_path=self.settings.paths.program_icon,
+                command="Looking on this PC…",
+                description="Apps, folders, websites and settings that are not commands yet",
+            )
+            self._add_row(row).setFlags(Qt.ItemFlag.NoItemFlags)
+
+    # -- the fallback: things on this PC that are not commands yet ----------------
+
+    def _fallback_matches(self, text: str) -> list[dict]:
+        """What on this PC starts with `text`, leaving out what is already a
+        command. The first miss starts the scan; one that is old is
+        refreshed in the background while the last one keeps answering."""
+        if not text.strip() or not self.settings.search.suggest_when_no_match:
+            return []
+        if self.fallback_index.is_stale():
+            self._start_fallback_scan()
+        if not self.fallback_index.loaded:
+            return []
+        limit = max(1, min(5, int(self.settings.search.max_results or 1)))
+        known = command_location_keys(self.cmd_manager.commands.values())
+        return self.fallback_index.search(text, known, limit)
+
+    def _start_fallback_scan(self):
+        if self._fallback_thread is not None:
+            return
+        # Not parented to the window, and held in _RUNNING_SCANS until it ends:
+        # Qt aborts the whole process if a running thread is destroyed, which
+        # closing the window mid-scan would otherwise do.
+        thread = ProgramDiscoveryThread()
+        _RUNNING_SCANS.add(thread)
+        thread.finished.connect(lambda: _RUNNING_SCANS.discard(thread))
+        thread.finished.connect(self._on_fallback_scan_finished)
+        self._fallback_thread = thread
+        log.debug("Fallback: looking on this PC")
+        thread.start()
+
+    def _on_fallback_scan_finished(self):
+        thread = self._fallback_thread
+        self._fallback_thread = None
+        if thread is None:
+            return
+        if thread.error_message:
+            log.warning("Fallback scan failed: %s", thread.error_message)
+            if not self.fallback_index.loaded:
+                self.fallback_index.set_candidates([])
+        else:
+            self.fallback_index.set_candidates(thread.candidates)
+            self._fallback_icons.clear()
+            log.debug("Fallback: %d things found on this PC", len(self.fallback_index.candidates))
+        thread.deleteLater()
+        # Fill in the rows if the miss that started the scan is still showing.
+        on_search_view = not hasattr(self, "view_stack") or self.view_stack.currentWidget() is self.central_widget
+        if self.isVisible() and on_search_view and self.user_text and not self.cmd_manager.find_matching_commands(self.user_text):
+            self._refresh_results()
+
+    def _fallback_pixmap(self, candidate: dict) -> QPixmap | None:
+        key = str(candidate.get("location") or "")
+        if key not in self._fallback_icons:
+            icon = self.icon_manager.resolve_command_icon(candidate)
+            self._fallback_icons[key] = icon.pixmap(QSize(64, 64)) if not icon.isNull() else QPixmap()
+        return self._fallback_icons[key]
+
+    def _fallback_row(self, candidate: dict) -> "ResultRow":
+        """An offer to add something as a command, not a result to open. The
+        suggested alias goes into the editor that adding opens."""
+        title = f"Add {candidate['name']}"
+        row = ResultRow(
+            self,
+            icon_path=self.settings.paths.default_command_icon,
+            icon_pixmap=self._fallback_pixmap(candidate),
+            command=title,
+            description=self._fallback_description(candidate),
+            action=lambda: self.add_fallback(candidate),
+        )
+        row.fallback_candidate = candidate
+        row.setProperty("fallback", True)
+        # A smaller icon in a dashed, empty-looking tile: a slot it could fill.
+        pixmap = row.icon_label.pixmap()
+        if pixmap is not None and not pixmap.isNull():
+            size = ResultRow.FALLBACK_ICON_SIZE
+            row.icon_label.setPixmap(
+                pixmap.scaled(size, size, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
+            )
+        row.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+        # The row and its labels were styled when created, before this
+        # property was set; style them again so the fallback rules apply.
+        for widget in (row, row.icon_label, row.command_label, row.description_label):
+            style = widget.style()
+            if style is not None:
+                style.unpolish(widget)
+                style.polish(widget)
+        row.setToolTip(str(candidate.get("location") or ""))
+        row.setAccessibleDescription("Not one of your commands yet. Enter opens it in the editor to add")
+        return row
+
+    @staticmethod
+    def _fallback_description(candidate: dict) -> str:
+        """A few words on what it is: "Folder in Documents", "App",
+        "youtube.com". The full location is the row's tooltip."""
+        location = str(candidate.get("location") or "")
+        name = str(candidate.get("name") or "")
+        if candidate.get("type", "file") == "file" and location and not is_link_location(location):
+            path = Path(location)
+            if path.suffix.casefold() in (".exe", ".lnk", ".bat", ".cmd", ".msc"):
+                return "App"
+            kind = "Folder" if path.is_dir() or not path.suffix else "File"
+            parent = path.parent.name
+            return f"{kind} in {parent}" if parent else kind
+        if location.casefold().startswith(("http://", "https://")):
+            host = urlparse(location).netloc
+            return host.removeprefix("www.") or location
+        description = str(candidate.get("description") or "")
+        if not description or description.casefold() == f"opens {name}".casefold():
+            return "Windows Settings" if location.startswith("ms-settings:") else "App"
+        return description
+
+    def _open_fallback(self, candidate: dict):
+        error = self.cmd_manager.open_candidate(self, candidate)
+        if error:
+            self.display_error_popup(f"Dash couldn't open {candidate.get('name')}: {error}")
+            return
+        self.hide_launcher()
+
+    def _say_instant_demoted(self, notes):
+        """A saved or added command starts with another's alias, which now
+        needs Enter so both can be reached: say which."""
+        for alias, owner, by in notes:
+            self.show_tray_notice(
+                f"'{alias}' now needs Enter",
+                f"{by} starts with '{alias}' too, so it no longer opens {owner} instantly.",
+                warning=False,
+            )
+
+    def add_fallback(self, candidate: dict):
+        """Enter (or Ctrl+N) on a fallback row: the new-command editor, filled
+        in from what was found, with the suggested aliases nothing else uses.
+        Nothing is added until Save, so the name and aliases can be checked
+        first; next time those letters find it as one of the user's commands."""
+        if hasattr(self, "view_stack") and self.view_stack.currentWidget() is not self.central_widget:
+            return
+        self.open_editor(None)
+        panel = self._editor_panel
+        if panel is None:
+            return
+        fields = {
+            "name": str(candidate.get("name") or ""),
+            "target": str(candidate.get("location") or ""),
+            "aliases": self.cmd_manager.keepable_aliases(candidate),
+            "description": str(candidate.get("description") or ""),
+            "arguments": str(candidate.get("arguments") or ""),
+            "working_folder": str(candidate.get("working_folder") or ""),
+        }
+        try:
+            panel.prefill(**fields)
+        except TypeError:
+            # An editor without the newer fields still gets name and target.
+            self._prefill_editor(panel, name=fields["name"], target=fields["target"])
+        log.info("Opened the editor for %s from the fallback", fields["name"])
 
     def _show_calculation(self, text: str) -> bool:
         """A result row for a calculation, or its plain problem ("Can't
@@ -2165,6 +2393,11 @@ class MainWindow(QMainWindow):
         """Ctrl+N: a new command, starting from what was typed. A path or
         web address becomes the target; anything else the name."""
         if hasattr(self, "view_stack") and self.view_stack.currentWidget() is not self.central_widget:
+            return
+        row = self.get_selected_row() if self.isVisible() else None
+        if row is not None and row.fallback_candidate is not None:
+            # On a result found on this PC: add that, not what was typed.
+            self.add_fallback(row.fallback_candidate)
             return
         typed = self.user_text.strip() if self.isVisible() else ""
         target = target_from_text(typed)
@@ -2330,7 +2563,6 @@ class MainWindow(QMainWindow):
             return
 
         selected = dialog.selected_candidates()
-        first_import = not self.cmd_manager.has_user_commands()
         try:
             summary = self.cmd_manager.import_program_commands(selected)
             if summary["imported"]:
@@ -2339,22 +2571,10 @@ class MainWindow(QMainWindow):
             self._show_save_error("Find Recommended Commands", error)
             return
         self._seed_run_counts(selected, summary["imported"])
-        imported_count = len(summary["imported"])
-        skipped_count = len(summary["skipped"])
-        message = f"Added {imported_count} command"
-        if imported_count != 1:
-            message += "s"
-        if skipped_count:
-            message += f". Skipped {skipped_count} already-present or conflicting candidate"
-            if skipped_count != 1:
-                message += "s"
-        message += "."
-        dropped = summary.get("dropped_aliases") or {}
-        if dropped:
-            listed = "; ".join(f"{name}: {', '.join(aliases)}" for name, aliases in sorted(dropped.items()))
-            message += f"\n\nSome suggested aliases were already in use, so they were left off ({listed})."
+        # Just the outcome: counts, skips and dropped aliases are noise here.
+        message = "Commands added." if summary["imported"] else "Nothing new to add: those are already commands."
         with self._dialog_open():
-            QMessageBox.information(self, "Find Recommended Commands", message + self._first_import_tip(first_import and bool(summary["imported"])))
+            QMessageBox.information(self, "Find Recommended Commands", message)
 
         self.show_load_warnings()
         self._refresh_results()
@@ -2429,7 +2649,6 @@ class MainWindow(QMainWindow):
         if not selected:
             return
 
-        first_import = not self.cmd_manager.has_user_commands()
         try:
             summary = self.cmd_manager.import_commands(selected)
             if summary["imported"]:
@@ -2437,26 +2656,11 @@ class MainWindow(QMainWindow):
         except OSError as error:
             self._show_save_error("Import Commands", error)
             return
-        imported_count = len(summary["imported"])
-        skipped_count = len(summary["skipped"])
-        message = f"Imported {imported_count} command"
-        if imported_count != 1:
-            message += "s"
-        if skipped_count:
-            message += f". Skipped {skipped_count} invalid or conflicting command"
-            if skipped_count != 1:
-                message += "s"
+        message = "Commands imported." if summary["imported"] else "Nothing new to import: those are already commands."
         with self._dialog_open():
-            QMessageBox.information(self, "Import Commands", message + "." + self._first_import_tip(first_import and bool(summary["imported"])))
+            QMessageBox.information(self, "Import Commands", message)
         self.show_load_warnings()
         self._refresh_results()
-
-    def _first_import_tip(self, first_import: bool) -> str:
-        """The one thing worth saying once the list stops being empty."""
-        if not first_import:
-            return ""
-        edit = self._format_shortcut(self.settings.shortcuts.edit_selected_command)
-        return f"\n\nType a few letters and press Enter to open a command. {edit} on a result edits it, including its aliases."
 
     def reset_all_run_counts(self):
         """Clear every command's run count after confirmation."""
@@ -2521,7 +2725,9 @@ class MainWindow(QMainWindow):
         row wrapped differently once real geometry was in place.
         """
         panel = self._editor_panel
-        if panel is None:
+        # The follow-up pass can run after the editor (or the window) was
+        # closed and destroyed; there is nothing left to fit then.
+        if panel is None or sip.isdeleted(panel) or sip.isdeleted(self):
             return
         width = self.settings.ui.program_width
         editor_size = clamp_size_to_screen(
@@ -2569,6 +2775,22 @@ class MainWindow(QMainWindow):
         widget = self.results_list_widget.itemWidget(item)
         return cast(ResultRow, widget) if widget is not None else None
 
+    def _look_on_this_pc(self):
+        """↓ on a miss: show what on this PC starts with the typed letters,
+        the first one selected since ↓ asked for it. When a scan has to run
+        first, the rows arrive unselected and the next ↓ reaches them."""
+        self._fallback_requested = True
+        self._refresh_results()
+        for index in range(self.results_list_widget.count()):
+            if self._is_fallback_row(index):
+                self.results_list_widget.setCurrentRow(index)
+                break
+
+    def _is_fallback_row(self, index: int) -> bool:
+        item = self.results_list_widget.item(index) if index >= 0 else None
+        widget = self.results_list_widget.itemWidget(item) if item is not None else None
+        return isinstance(widget, ResultRow) and widget.fallback_candidate is not None
+
     def get_selected_command(self):
         row = self.get_selected_row()
         return row.command_name if row is not None else None
@@ -2579,10 +2801,22 @@ class MainWindow(QMainWindow):
 
         if event.key() == Qt.Key.Key_Escape:
             self.hide_launcher()
+        elif (
+            event.key() == Qt.Key.Key_Down
+            and self._showing_miss
+            and not self._fallback_requested
+            and self.settings.search.suggest_when_no_match
+        ):
+            self._look_on_this_pc()
         elif event.key() in (Qt.Key.Key_Down, Qt.Key.Key_Up) and count > 0:
             step = 1 if event.key() == Qt.Key.Key_Down else -1
             # Skip rows that are only for reading, like "No commands match".
             for offset in range(1, count + 1):
+                if step < 0 and row + step * offset < 0 and self._is_fallback_row(row):
+                    # Up past the first fallback row goes back to nothing
+                    # selected, as before ↓, rather than wrapping round.
+                    self.results_list_widget.setCurrentRow(-1)
+                    break
                 target = (row + step * offset) % count
                 if self.results_list_widget.item(target).flags() & Qt.ItemFlag.ItemIsSelectable:
                     self.results_list_widget.setCurrentRow(target)
@@ -2600,6 +2834,7 @@ class MainWindow(QMainWindow):
         instead of as an unprompted dialog at startup.
         """
         self.results_list_widget.clear()
+        self._showing_miss = False
         if not self.cmd_manager.has_user_commands():
             self._show_empty_state()
             return
@@ -2644,6 +2879,7 @@ class MainWindow(QMainWindow):
     def show_results(self, results):
         self.results_list_widget.show()
         self.results_list_widget.clear()
+        self._showing_miss = False
         self._sync_search_view_size()
 
         if not results:
@@ -2736,6 +2972,7 @@ class MainWindow(QMainWindow):
 class ResultRow(QWidget):
     ICON_SIZE = 28  # glyph inside the tile
     ICON_TILE_SIZE = 42  # rounded tile drawn behind every icon (see #ResultIconTile)
+    FALLBACK_ICON_SIZE = 24  # glyph on a fallback row: bare, with no tile behind it
 
     def __init__(
         self,
@@ -2768,6 +3005,8 @@ class ResultRow(QWidget):
         self.action = action
         # Set for a search keyword row: the text typed after the keyword.
         self.query = query
+        # Set for a fallback row: what was found on this PC, not a command yet.
+        self.fallback_candidate: dict | None = None
 
         # Create the main horizontal layout
         row_layout = QHBoxLayout(self)
@@ -2861,7 +3100,9 @@ class ResultRow(QWidget):
         self.setProperty("selected", selected)
         if self.search_hint_label is not None:
             self.search_hint_label.setVisible(selected)
-        for widget in (self.icon_label, self.run_counter_label):
+        # The row too: a fallback row paints its own background, which shows
+        # whether it is selected.
+        for widget in (self, self.icon_label, self.command_label, self.run_counter_label):
             style = widget.style()
             if style is not None:
                 style.unpolish(widget)

@@ -334,5 +334,20 @@ class ShortcutArgumentTests(unittest.TestCase):
         self.assertEqual(commands[2]["location"], str(chrome))
 
 
+class StartMenuFolderTests(unittest.TestCase):
+    def test_windows_own_start_menu_folders_lead_and_are_listed_once(self):
+        installed_programs = load_installed_programs_module()
+        with TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir)
+            redirected, usual = root / "Redirected", root / "Usual"
+            known = {installed_programs._START_MENU_FOLDER_IDS[0]: redirected, installed_programs._START_MENU_FOLDER_IDS[1]: usual}
+            with (
+                mock.patch.object(installed_programs, "_known_folder_path", side_effect=known.get),
+                mock.patch.object(installed_programs, "START_MENU_DIRS", [usual, root / "Other"]),
+                mock.patch.object(installed_programs.sys, "platform", "win32"),
+            ):
+                self.assertEqual(installed_programs._start_menu_dirs(), [redirected, usual, root / "Other"])
+
+
 if __name__ == "__main__":
     unittest.main()

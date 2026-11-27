@@ -312,23 +312,61 @@ def hotkey_recording() -> _HotkeyRecording:
 
 
 class HotkeyLineEdit(QLineEdit):
-    """Read-only editor that records the next key combination pressed."""
+    """Read-only field that records a key combination when asked to.
+
+    Tabbing onto it records nothing, so Tab, Esc and Enter keep working as
+    they do everywhere else in Settings. Enter, Space or a click starts
+    recording; the next combination pressed is kept, and Esc puts the old
+    one back. Tab or Shift+Tab while recording also leaves it unchanged.
+    """
+
+    HINT = "Press Enter to change"
+    RECORDING_HINT = "Press the new keys, or Esc to keep it"
+    # A recording ended with different keys than before.
+    keysChanged = pyqtSignal()
 
     def __init__(self, value, parent=None):
         super().__init__(str(value), parent)
         self.setReadOnly(True)
-        self.setPlaceholderText("Press a key combination")
-        self.setToolTip("Click here, then press the key combination to use")
+        self.setPlaceholderText(self.RECORDING_HINT)
+        self.setToolTip(f"{self.HINT}, or click, then press the key combination to use")
         self._recording = False
+        self._before = str(value)
+
+    @property
+    def recording(self) -> bool:
+        return self._recording
 
     def _set_recording(self, recording: bool):
-        if recording != self._recording:
-            self._recording = recording
-            hotkey_recording().changed.emit(recording)
+        if recording == self._recording:
+            return
+        self._recording = recording
+        if recording:
+            self._before = self.text()
+            self.clear()  # the placeholder says what to press
+        elif not self.text():
+            self.setText(self._before)
+        if not recording and self.text() != self._before:
+            self.keysChanged.emit()
+        self.setProperty("recording", recording)
+        style = self.style()
+        if style is not None:
+            style.unpolish(self)
+            style.polish(self)
+        self.setAccessibleDescription(self.RECORDING_HINT if recording else self.HINT)
+        hotkey_recording().changed.emit(recording)
+
+    def start_recording(self):
+        self.setFocus()
+        self._set_recording(True)
+
+    def mousePressEvent(self, event):
+        super().mousePressEvent(event)
+        self.start_recording()
 
     def focusInEvent(self, event):
         super().focusInEvent(event)
-        self._set_recording(True)
+        self.setAccessibleDescription(self.HINT)
 
     def focusOutEvent(self, event):
         self._set_recording(False)
@@ -339,29 +377,106 @@ class HotkeyLineEdit(QLineEdit):
         super().hideEvent(event)
 
     def event(self, event):
-        # Every key is for recording, including ones Dash's own shortcuts
-        # (Ctrl+N, Alt+Enter) would otherwise take before it arrives here.
-        if event.type() == QEvent.Type.ShortcutOverride:
+        # While recording, every key is for recording, including ones Dash's
+        # own shortcuts (Ctrl+N, Alt+Enter, Esc) would otherwise take first.
+        if event.type() == QEvent.Type.ShortcutOverride and self._recording:
             event.accept()
             return True
+        if event.type() == QEvent.Type.KeyPress and self._recording and event.key() in (Qt.Key.Key_Tab, Qt.Key.Key_Backtab):
+            self._set_recording(False)  # leaving keeps what was there
         return super().event(event)
 
     def keyPressEvent(self, event):
-        modifier_keys = {
-            Qt.Key.Key_Control,
-            Qt.Key.Key_Shift,
-            Qt.Key.Key_Alt,
-            Qt.Key.Key_Meta,
-        }
-        if event.key() in modifier_keys:
+        key = event.key()
+        plain = not (event.modifiers() & ~Qt.KeyboardModifier.KeypadModifier)
+        if not self._recording:
+            if plain and key in (Qt.Key.Key_Return, Qt.Key.Key_Enter, Qt.Key.Key_Space):
+                self._set_recording(True)
+                event.accept()
+                return
+            event.ignore()  # Esc, Ctrl+S and the rest go to Settings
+            return
+        if plain and key == Qt.Key.Key_Escape:
+            self.setText(self._before)
+            self._set_recording(False)
             event.accept()
             return
-
-        sequence = QKeySequence(event.modifiers().value | event.key())
+        if key in (Qt.Key.Key_Control, Qt.Key.Key_Shift, Qt.Key.Key_Alt, Qt.Key.Key_Meta):
+            event.accept()
+            return
+        sequence = QKeySequence(event.modifiers().value | key)
         text = sequence.toString(QKeySequence.SequenceFormat.PortableText)
         if text:
             self.setText(text)
+            self._set_recording(False)
         event.accept()
+
+
+class ListKeys(QObject):
+    """The keyboard for a list in a dialog: Space ticks the current row,
+    F2 (or Enter, when `enter_edits`) edits it, Delete removes the
+    selection, and Up from the top row goes back to the filter box."""
+
+    def __init__(self, list_widget: QListWidget, *, toggle=None, edit=None, delete=None, enter_edits=False, back_to=None):
+        super().__init__(list_widget)
+        self.list_widget = list_widget
+        self.toggle = toggle
+        self.edit = edit
+        self.delete = delete
+        self.enter_edits = enter_edits
+        self.back_to = back_to
+        list_widget.installEventFilter(self)
+
+    def eventFilter(self, watched, event):
+        if watched is not self.list_widget or event.type() != QEvent.Type.KeyPress:
+            return False
+        key = event.key()
+        plain = not (event.modifiers() & ~Qt.KeyboardModifier.KeypadModifier)
+        item = self.list_widget.currentItem()
+        if item is not None and item.isHidden():
+            item = None
+        if plain and key == Qt.Key.Key_Space and self.toggle is not None and item is not None:
+            self.toggle(item)
+            return True
+        if plain and self.edit is not None and item is not None and (
+            key == Qt.Key.Key_F2 or (self.enter_edits and key in (Qt.Key.Key_Return, Qt.Key.Key_Enter))
+        ):
+            self.edit(item)
+            return True
+        if plain and key == Qt.Key.Key_Delete and self.delete is not None:
+            self.delete()
+            return True
+        if plain and key == Qt.Key.Key_Up and self.back_to is not None and self._is_first_visible(item):
+            self.back_to.setFocus()
+            return True
+        return False
+
+    def _is_first_visible(self, item) -> bool:
+        for row in range(self.list_widget.count()):
+            candidate = self.list_widget.item(row)
+            if not candidate.isHidden():
+                return candidate is item
+        return True
+
+
+def filter_leads_to_list(filter_box: QLineEdit, list_widget: QListWidget) -> None:
+    """↓ in a filter box moves into its list, onto the first row shown."""
+
+    class _Down(QObject):
+        def eventFilter(self, watched, event):
+            if event.type() == QEvent.Type.KeyPress and event.key() == Qt.Key.Key_Down:
+                current = list_widget.currentItem()
+                if current is None or current.isHidden():
+                    for row in range(list_widget.count()):
+                        if not list_widget.item(row).isHidden():
+                            list_widget.setCurrentRow(row)
+                            break
+                list_widget.setFocus()
+                return True
+            return False
+
+    helper = _Down(filter_box)
+    filter_box.installEventFilter(helper)
 
 
 class XCheckBox(QCheckBox):
@@ -551,6 +666,10 @@ class SettingsEditorPanel(QFrame):
         self._settings = settings
         self._settings_path = settings_path
         self._controls = {}
+        # The first control of each group, in Tab order, for Ctrl+↑ and Ctrl+↓.
+        self._group_starts: list[QWidget] = []
+        # Every group, left column then right, in the order shown.
+        self._groups: list[QGroupBox] = []
 
         title = QLabel("Settings")
         title.setObjectName("SettingsTitle")
@@ -587,27 +706,30 @@ class SettingsEditorPanel(QFrame):
         # becomes scrollable and the bar has somewhere constant to appear.
         content_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOn)
         content_scroll.setFrameShape(QFrame.Shape.NoFrame)
+        # Not a Tab stop of its own: it scrolls to whichever control has focus.
+        content_scroll.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         content_scroll.setWidget(content)
+        self._scroll = content_scroll
         self._scroll_fade = ScrollEdgeFade(content_scroll)
 
+        # Changes save as they are made, so there is nothing to confirm or
+        # undo: Close (or Esc) just leaves.
         self.close_button = QPushButton("Close")
         self.close_button.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.close_button.setToolTip("Changes are saved as you make them (Esc)")
         self.close_button.clicked.connect(self._cancel)
-
-        self.cancel_button = QPushButton("Cancel")
-        self.cancel_button.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.cancel_button.clicked.connect(self._cancel)
-
-        self.save_button = QPushButton("Save")
-        self.save_button.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.save_button.setDefault(True)
-        self.save_button.clicked.connect(self._save)
+        self.saved_note = QLabel("Saved")
+        self.saved_note.setObjectName("footerHint")
+        self.saved_note.hide()
+        self._saved_note_timer = QTimer(self)
+        self._saved_note_timer.setSingleShot(True)
+        self._saved_note_timer.setInterval(1500)
+        self._saved_note_timer.timeout.connect(self.saved_note.hide)
 
         buttons = QHBoxLayout()
         buttons.addStretch(1)
+        buttons.addWidget(self.saved_note)
         buttons.addWidget(self.close_button)
-        buttons.addWidget(self.cancel_button)
-        buttons.addWidget(self.save_button)
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(28, 16, 28, 22)
@@ -619,8 +741,27 @@ class SettingsEditorPanel(QFrame):
         cancel_shortcut = QShortcut(QKeySequence(Qt.Key.Key_Escape), self)
         cancel_shortcut.setContext(Qt.ShortcutContext.WindowShortcut)
         cancel_shortcut.activated.connect(self._cancel)
+        for keys, action in (
+            (QKeySequence("Ctrl+Down"), lambda: self._jump_group(1)),
+            (QKeySequence("Ctrl+Up"), lambda: self._jump_group(-1)),
+        ):
+            shortcut = QShortcut(keys, self)
+            shortcut.setContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
+            shortcut.activated.connect(action)
 
+        self._order_tab_chain()
         self._connect_signals()
+        # Arrow keys and Enter, for every control Tab reaches. Not a drop-down's
+        # list: once it is open, its own arrow keys choose an entry.
+        self._content = content
+        for widget in self.findChildren(QWidget):
+            if (
+                widget.focusPolicy() & Qt.FocusPolicy.TabFocus
+                and not isinstance(widget, QScrollArea)
+                and widget.window() is self.window()
+                and not (widget.windowFlags() & Qt.WindowType.Popup)
+            ):
+                widget.installEventFilter(self)
         self._update_hotkey_warning()
         self._update_web_search_rows()
         self._update_size_rows()
@@ -639,6 +780,9 @@ class SettingsEditorPanel(QFrame):
         reader announces what each field is for.
         """
         group = QGroupBox(title)
+        first = rows[0][2] if len(rows[0]) == 3 else rows[0][1][0][1]
+        self._group_starts.append(first)
+        self._groups.append(group)
         form = QFormLayout(group)
         form.setContentsMargins(14, 14, 14, 12)
         form.setHorizontalSpacing(16)
@@ -668,6 +812,159 @@ class SettingsEditorPanel(QFrame):
                 label_widget.setBuddy(pairs[0][1])
                 form.addRow(label_widget, holder)
         return group
+
+    def _order_tab_chain(self):
+        """Tab, Shift+Tab, ↑ and ↓ follow the page as it reads: each group
+        top to bottom, the left column before the right, then Close. Qt's own
+        order is the order controls were made in, and a row added to a group
+        afterwards (Usage history) would otherwise come last."""
+
+        def controls_in(layout):
+            for index in range(layout.count()):
+                item = layout.itemAt(index)
+                widget = item.widget()
+                if widget is not None:
+                    if widget.focusPolicy() & Qt.FocusPolicy.TabFocus and not isinstance(widget, QLabel):
+                        yield widget
+                    elif widget.layout() is not None:
+                        yield from controls_in(widget.layout())
+                elif item.layout() is not None:
+                    yield from controls_in(item.layout())
+
+        def form_controls(group):
+            form = group.layout()
+            if not isinstance(form, QFormLayout):
+                yield from controls_in(form)
+                return
+            for row in range(form.rowCount()):
+                for role in (QFormLayout.ItemRole.LabelRole, QFormLayout.ItemRole.FieldRole, QFormLayout.ItemRole.SpanningRole):
+                    item = form.itemAt(row, role)
+                    if item is None:
+                        continue
+                    widget = item.widget()
+                    if widget is not None and widget.focusPolicy() & Qt.FocusPolicy.TabFocus and not isinstance(widget, QLabel):
+                        yield widget
+                    elif widget is not None and widget.layout() is not None:
+                        yield from controls_in(widget.layout())
+                    elif item.layout() is not None:
+                        yield from controls_in(item.layout())
+
+        chain = [control for group in self._groups for control in form_controls(group)]
+        chain.append(self.close_button)
+        for earlier, later in zip(chain, chain[1:]):
+            QWidget.setTabOrder(earlier, later)
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        # Start on the first setting, so the keyboard works from the first key.
+        QTimer.singleShot(0, self._focus_first_control)
+
+    def _focus_first_control(self):
+        focus = QApplication.focusWidget()
+        if focus is not None and self.isAncestorOf(focus) and focus is not self:
+            return
+        if self._group_starts:
+            self._focus_control(self._group_starts[0])
+
+    def _focus_control(self, control: QWidget):
+        control.setFocus(Qt.FocusReason.TabFocusReason)
+        self._scroll.ensureWidgetVisible(control, 0, 40)
+
+    def eventFilter(self, watched, event):
+        """The keyboard in Settings, so the mouse is never needed:
+
+        ↑ / ↓ move to the previous or next setting (the Tab order).
+        ← / → jump to the other column, to the setting level with this one.
+        Enter opens a drop-down (its list then takes ↑ / ↓ and Enter),
+        ticks a box and presses a button. + and − step a number.
+
+        A shortcut field that is recording keeps every key for itself, and an
+        open drop-down list has the keys while it is open.
+        """
+        if event.type() != QEvent.Type.KeyPress or not isinstance(watched, QWidget):
+            return super().eventFilter(watched, event)
+        if isinstance(watched, HotkeyLineEdit) and watched.recording:
+            return False
+        if watched.window() is not self.window():
+            return False  # an open drop-down list keeps its keys
+        key = event.key()
+        if event.modifiers() & ~Qt.KeyboardModifier.KeypadModifier:
+            return False
+        if key in (Qt.Key.Key_Up, Qt.Key.Key_Down):
+            self._step_focus(key == Qt.Key.Key_Down)
+            return True
+        typing = isinstance(watched, QLineEdit) and not watched.isReadOnly()
+        if key in (Qt.Key.Key_Left, Qt.Key.Key_Right) and not typing:
+            self._jump_column(watched, key == Qt.Key.Key_Right)
+            return True
+        enter = key in (Qt.Key.Key_Return, Qt.Key.Key_Enter)
+        if isinstance(watched, QComboBox):
+            if enter:
+                watched.showPopup()
+                return True
+        elif isinstance(watched, (QSpinBox, QDoubleSpinBox)):
+            if key in (Qt.Key.Key_Plus, Qt.Key.Key_Minus, Qt.Key.Key_Equal):
+                watched.stepBy(-1 if key == Qt.Key.Key_Minus else 1)
+                self._commit_soon()
+                return True
+        elif isinstance(watched, QCheckBox) and enter:
+            watched.toggle()
+            return True
+        elif isinstance(watched, QPushButton) and enter:
+            watched.click()
+            return True
+        return False
+
+    def _jump_column(self, control: QWidget, rightward: bool):
+        """The setting in the other column nearest the same height as
+        `control`. Nothing happens at the outer edge of either column."""
+        content = self._content
+        middle = content.width() / 2
+
+        def centre(widget):
+            point = widget.mapTo(content, widget.rect().center())
+            return point.x(), point.y()
+
+        if not content.isAncestorOf(control):
+            return
+        x, y = centre(control)
+        if (x >= middle) == rightward:
+            return
+        candidates = []
+        for widget in content.findChildren(QWidget):
+            if not (widget.focusPolicy() & Qt.FocusPolicy.TabFocus) or not widget.isVisibleTo(content) or not widget.isEnabled():
+                continue
+            if widget.focusProxy() is not None or isinstance(widget.parentWidget(), (QSpinBox, QDoubleSpinBox, QComboBox)):
+                continue
+            wx, wy = centre(widget)
+            if (wx >= middle) == rightward:
+                candidates.append((abs(wy - y), wy, widget))
+        if candidates:
+            target = min(candidates, key=lambda entry: entry[:2])[2]
+            self._focus_control(target)
+
+    def _step_focus(self, forward: bool):
+        self.focusNextPrevChild(forward)
+        focus = QApplication.focusWidget()
+        if focus is not None and self._scroll.widget().isAncestorOf(focus):
+            self._scroll.ensureWidgetVisible(focus, 0, 40)
+
+    def _jump_group(self, step: int):
+        """Ctrl+↓ / Ctrl+↑: the first setting of the next or previous group."""
+        starts = [control for control in self._group_starts if control.isVisibleTo(self) and control.isEnabled()]
+        if not starts:
+            return
+        focus = QApplication.focusWidget()
+        current = -1
+        for index, control in enumerate(starts):
+            group = control.parentWidget()
+            while group is not None and not isinstance(group, QGroupBox):
+                group = group.parentWidget()
+            if focus is not None and group is not None and group.isAncestorOf(focus):
+                current = index
+                break
+        target = starts[(current + step) % len(starts)] if current >= 0 else starts[0 if step > 0 else -1]
+        self._focus_control(target)
 
     @staticmethod
     def _name_for_accessibility(control, label: str):
@@ -827,6 +1124,21 @@ class SettingsEditorPanel(QFrame):
                     self._check(search.match_word_starts, "\"code\" finds Visual Studio Code"),
                 ),
                 (
+                    "Suggest things to add",
+                    "search.suggest_when_no_match",
+                    self._check(search.suggest_when_no_match, "When nothing matches, offer apps and folders on this PC"),
+                ),
+                (
+                    "Aliases open instantly",
+                    "search.instant_aliases",
+                    self._check(search.instant_aliases, "No Enter needed, when nothing else starts the same way"),
+                ),
+                (
+                    "Instantly open when one match is left",
+                    "search.open_only_match",
+                    self._check(search.open_only_match, "When what you type matches just one command, open it without Enter"),
+                ),
+                (
                     "Sort results by",
                     "search.sort_results",
                     self._choice(search.sort_results, [("popularity", "Most used first"), ("name", "Name (A to Z)")]),
@@ -842,7 +1154,8 @@ class SettingsEditorPanel(QFrame):
         clear_history_button.setAccessibleName("Clear usage history")
         clear_history_button.clicked.connect(self.resetRunCountsRequested.emit)
         form = cast(QFormLayout, group.layout())
-        form.insertRow(4, "Usage history", clear_history_button)
+        sort_row, _role = form.getWidgetPosition(self._controls["search.sort_results"])
+        form.insertRow(sort_row + 1, "Usage history", clear_history_button)
         return group
 
     def _results_group(self):
@@ -940,6 +1253,8 @@ class SettingsEditorPanel(QFrame):
         layout.addWidget(auto_populate_button)
         layout.addWidget(export_button)
         layout.addWidget(import_button)
+        self._group_starts.append(manage_button)
+        self._groups.append(group)
         return group
 
     # --------------------------------------------------- dependent rows
@@ -1047,6 +1362,9 @@ class SettingsEditorPanel(QFrame):
                 autocomplete=self._value("search.autocomplete"),
                 ignore_case=bool(self._value("search.ignore_case")),
                 match_word_starts=bool(self._value("search.match_word_starts")),
+                suggest_when_no_match=bool(self._value("search.suggest_when_no_match")),
+                instant_aliases=bool(self._value("search.instant_aliases")),
+                open_only_match=bool(self._value("search.open_only_match")),
                 sort_results=self._value("search.sort_results"),
                 show_descriptions=self._value("search.show_descriptions"),
                 show_run_counter=self._value("search.show_run_counter"),
@@ -1080,33 +1398,44 @@ class SettingsEditorPanel(QFrame):
         return True
 
     def _update_dirty_state(self):
-        dirty = self._is_dirty()
-        self.close_button.setVisible(not dirty)
-        self.cancel_button.setVisible(dirty)
-        self.save_button.setVisible(dirty)
-        self.save_button.setEnabled(self._is_valid())
+        """Kept for the callers that refresh after changing a control: the
+        panel has no Save button to show, so there is nothing to update."""
 
     def _connect_signals(self):
+        """Every change saves itself. A tick or a choice saves at once; a
+        number or typed text saves when the field is left (or Enter), so a
+        half-typed value is never applied. Shortcut fields save when a
+        recording ends with new keys."""
         for key, control in self._controls.items():
-            if isinstance(control, QComboBox):
-                control.currentIndexChanged.connect(self._update_dirty_state)
+            if isinstance(control, HotkeyLineEdit):
+                control.keysChanged.connect(self._commit_soon)
+            elif isinstance(control, QComboBox):
+                control.currentIndexChanged.connect(self._commit_soon)
             elif isinstance(control, QLineEdit):
-                control.textChanged.connect(self._update_dirty_state)
+                control.editingFinished.connect(self._commit_soon)
             elif isinstance(control, QCheckBox):
-                control.toggled.connect(self._update_dirty_state)
+                control.toggled.connect(self._commit_soon)
             elif isinstance(control, (QSpinBox, QDoubleSpinBox)):
                 if key.removeprefix("ui.") in SIZE_KEYS:
                     control.valueChanged.connect(self._on_size_value_changed)
-                control.valueChanged.connect(self._update_dirty_state)
+                control.editingFinished.connect(self._commit_soon)
         self._size_choice.currentIndexChanged.connect(self._on_size_preset_chosen)
+        self._size_choice.currentIndexChanged.connect(self._commit_soon)
         self._controls["general.hotkey"].textChanged.connect(self._update_hotkey_warning)
         self._controls["general.web_search"].currentIndexChanged.connect(self._update_web_search_rows)
         self._web_search_custom.textChanged.connect(self._update_web_search_rows)
-        self._web_search_custom.textChanged.connect(self._update_dirty_state)
+        self._web_search_custom.editingFinished.connect(self._commit_soon)
 
-    def _save(self):
-        if not self._is_valid():
-            return
+    def _commit_soon(self, *_args):
+        # After the rows that depend on this change have caught up with it.
+        QTimer.singleShot(0, self._commit)
+
+    def _commit(self) -> bool:
+        """Save what changed, without closing. False when nothing could be
+        saved: nothing changed, a value is not valid yet, or the file
+        couldn't be written (which has been said)."""
+        if not self._is_dirty() or not self._is_valid():
+            return False
         settings = self._collect()
         settings.read_failed = getattr(self._settings, "read_failed", False)
         try:
@@ -1129,13 +1458,23 @@ class SettingsEditorPanel(QFrame):
             # Re-theme before the window reacts to the new settings, so
             # anything it redraws already uses the new colors.
             name = theme.apply_theme(QApplication.instance(), settings)
+        self._settings = settings
+        self._explorer_menu_initial = bool(self._value(EXPLORER_MENU_KEY))
         self.saved.emit(settings)
         if theme_changed:
             self.themeChanged.emit(name)
+        self.saved_note.show()
+        self._saved_note_timer.start()
+        return True
+
+    def _save(self):
+        """Save anything still pending, then close."""
+        self._commit()
         self.closed.emit()
 
     def _cancel(self):
-        self.closed.emit()
+        # Leaving is leaving a field too: what was typed in it is kept.
+        self._save()
 
 
 def candidate_kind(candidate: dict) -> str:
@@ -1316,8 +1655,11 @@ class ProgramImportDialog(DragToMoveMixin, QDialog):
         for candidate in group:
             self._add_item(list_widget, candidate, checked=recently_used(candidate))
         filter_box.textChanged.connect(lambda text, lw=list_widget: self._apply_filter(lw, text))
-        list_widget.setSelectionMode(QListWidget.SelectionMode.NoSelection)
+        # One row at a time is current, so the keyboard shows where it is.
+        list_widget.setSelectionMode(QListWidget.SelectionMode.SingleSelection)
         list_widget.itemClicked.connect(self._toggle_item)  # clicking the row ticks it
+        filter_leads_to_list(filter_box, list_widget)
+        ListKeys(list_widget, toggle=self._toggle_item, edit=self._edit_item, back_to=filter_box)
         page_layout = QVBoxLayout(page)
         page_layout.setContentsMargins(0, 10, 0, 0)
         page_layout.setSpacing(8)
@@ -1784,6 +2126,12 @@ class ManageCommandsDialog(DragToMoveMixin, QDialog):
         layout.addWidget(self.empty_message)
         layout.addLayout(actions)
         layout.addWidget(buttons)
+        filter_leads_to_list(self.filter_box, self.command_list)
+        ListKeys(self.command_list, edit=self._request_edit, delete=self.delete_selected, enter_edits=True, back_to=self.filter_box)
+        find = QShortcut(QKeySequence.StandardKey.Find, self)
+        find.activated.connect(lambda: (self.filter_box.setFocus(), self.filter_box.selectAll()))
+        self.edit_button.setToolTip("Open the selected command in the editor (Enter)")
+        self.delete_button.setToolTip("Delete the selected commands (Delete)")
         self._update_buttons()
 
     def showEvent(self, event):
@@ -1918,8 +2266,9 @@ class ImportCommandsDialog(DragToMoveMixin, QDialog):
         self.command_list.setObjectName("ScanResultList")
         self.command_list.setAccessibleName("Commands to import")
         self.command_list.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        self.command_list.setSelectionMode(QListWidget.SelectionMode.NoSelection)
+        self.command_list.setSelectionMode(QListWidget.SelectionMode.SingleSelection)
         self.command_list.itemClicked.connect(self._toggle_item)
+        ListKeys(self.command_list, toggle=self._toggle_item, edit=self._edit_item)
 
         importable = [c for c in candidates if not c.get("_conflict")]
         for candidate in importable:

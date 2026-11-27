@@ -24,14 +24,16 @@
 - **Instant access:** Open Dash from anywhere with a global hotkey: `Alt+Space` (configure in settings).
 - **Flexible commands:** Launch applications, files, folders, websites, Store apps and Windows Settings pages from one search box, with optional arguments and a start-in folder for apps.
 - **Aliases:** Add the terms you naturally type, so `gh` can open GitHub and `mail` your inbox.
+- **Instant aliases:** An alias opens its command as soon as you type it, with no Enter, whenever nothing else starts with the same letters.
 - **Site search:** Put `{query}` in a website's address and `gh dash` searches it, while `gh` on its own still opens the site.
 - **Groups:** One command that opens several others, in order, so a project's apps, folders and tabs start together.
 - **Quick calculations:** Work out sums like `12*8`, `200+15%` or `sqrt(2)` where you type; Enter copies the answer.
 - **Already open? Switch to it:** Opening an app that is running brings its window forward rather than starting a second copy.
 - **More than open:** Right-click a result (or use the keys below) to run it as administrator, open its folder, copy its path or open a new copy.
-- **Add from anywhere:** Copy a file or folder in Explorer and press `Ctrl+V` in Dash, drop a file, shortcut or link on it, or turn on "Add to Dash" in File Explorer's right-click menu, to make it a command. Type something that matches nothing and `Ctrl+N` adds it, with what you typed already filled in.
+- **Add from anywhere:** Copy a file or folder in Explorer and press `Ctrl+V` in Dash, drop a file, shortcut or link on it, or turn on "Add to Dash" in File Explorer's right-click menu, to make it a command. Type something that matches nothing and press `↓` to see matching apps, folders and sites on this PC to add, or `Ctrl+N` to add what you typed.
 - **Icons you pick:** Every command gets one on its own, and you can swap in a library glyph or your own image, recolor it, or go back to the one Dash found.
 - **Take it with you:** Export commands to a portable file and import them on another PC, icons and all.
+- **Keyboard all the way:** Settings and the command editor work without the mouse, and every change saves as you make it.
 - **Made to fit:** Light, dark or system theme, size, hotkeys, the display Dash opens on, the browser websites use, the web search engine, text sizes, the clock and the update check are all settings.
 
 ## Why another launcher?
@@ -45,7 +47,8 @@ Dash does less on purpose:
 - **Only your commands.** Nothing is indexed. The list holds what you added,
   so there is nothing in the results you don't care about. A one-off scan can
   import your installed programs as a starting point, but you choose what
-  stays.
+  stays. When nothing matches, Dash can show what on this PC fits, but only
+  behind `↓`, and only to add as a command.
 - **Predictable matching.** Results are prefix matches on names and aliases,
   followed by names with a later word that starts with what you typed (so
   `code` finds Visual Studio Code). The same letters always narrow to the

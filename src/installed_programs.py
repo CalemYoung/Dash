@@ -16,6 +16,10 @@ START_MENU_DIRS = [
     Path(os.environ.get("APPDATA", "")) / "Microsoft" / "Windows" / "Start Menu" / "Programs",
     Path(os.environ.get("PROGRAMDATA", "")) / "Microsoft" / "Windows" / "Start Menu" / "Programs",
 ]
+# FOLDERID_Programs and FOLDERID_CommonPrograms: the Start Menu folders as
+# Windows has them, which a redirected profile or a changed APPDATA moves away
+# from the paths above.
+_START_MENU_FOLDER_IDS = ("{A77F5D77-2E2B-44C3-A6A2-ABA601054A51}", "{0139D44E-6AFE-49F2-8690-3DAFCAE6FFB8}")
 
 APP_PATHS_ROOT = r"Software\Microsoft\Windows\CurrentVersion\App Paths"
 
@@ -712,9 +716,24 @@ def _in_package_folder(path: Path) -> bool:
     return "\\windowsapps\\" in os.path.normcase(os.path.abspath(os.fspath(path))) + "\\"
 
 
+def _start_menu_dirs() -> list[Path]:
+    """Windows' own Start Menu folders first, then the usual paths, once each."""
+    folders: list[Path] = []
+    seen: set[str] = set()
+    known = [_known_folder_path(folder_id) for folder_id in _START_MENU_FOLDER_IDS] if sys.platform == "win32" else []
+    for folder in [*known, *START_MENU_DIRS]:
+        if folder is None:
+            continue
+        key = os.path.normcase(os.path.abspath(os.fspath(folder)))
+        if key not in seen:
+            seen.add(key)
+            folders.append(folder)
+    return folders
+
+
 def _start_menu_shortcuts() -> list[Path]:
     shortcuts: list[Path] = []
-    for folder in START_MENU_DIRS:
+    for folder in _start_menu_dirs():
         if folder.exists():
             shortcuts.extend(folder.rglob("*.lnk"))
     return sorted(shortcuts, key=lambda path: str(path).casefold())

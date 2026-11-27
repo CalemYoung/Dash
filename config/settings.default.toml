@@ -50,6 +50,15 @@ ignore_case = true
 # Also match the start of any word in a name, so "code" finds "Visual Studio
 # Code". These matches always come after names that start with what you typed.
 match_word_starts = true
+# Nothing matched: offer apps, folders, websites and Settings pages found on
+# this PC to add as commands. Dash only looks when none of your commands match.
+suggest_when_no_match = true
+# Aliases open their command as soon as they are typed, without Enter, when
+# no other name or alias starts with the same letters. Others need Enter.
+instant_aliases = true
+# Open a command as soon as what you type matches it and nothing else,
+# without Enter. Search sites wait, so a search can still be typed.
+open_only_match = false
 # "popularity" puts the most-run matches first (ties by name); "name" is alphabetical.
 sort_results = "popularity"
 show_descriptions = true

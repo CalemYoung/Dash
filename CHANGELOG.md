@@ -6,6 +6,47 @@ All notable changes to Dash are listed here. The format follows
 
 ## [Unreleased]
 
+## [2.11.0] - 2026-11-27
+
+### Added
+
+- Instant aliases: typing an alias opens its command straight away, without
+  Enter, when no other name or alias starts with the same letters. Aliases
+  that share their start with something else still need Enter. Adding a
+  command that starts with an alias makes that alias need Enter, and Dash
+  says so. Turn it off with "Aliases open instantly" under Settings.
+- Suggestions from this PC when nothing matches: Dash looks in the same
+  places as "Find recommended commands" (programs, Store apps, Windows tools,
+  Quick Access folders, bookmarks, Settings pages and popular websites) and
+  says how many it found. Press `↓` to see them; `Enter` opens the
+  new-command editor filled in, and nothing is added until you save. Newly
+  installed programs show up within a minute. Turn it off with "Suggest
+  things to add".
+- "Instantly open when one match is left", off by default: opens a command
+  as soon as what you type matches it and nothing else.
+- Settings and the command editor work from the keyboard alone: `↑` `↓`
+  move between settings, `←` `→` jump between the two columns of Settings,
+  `Ctrl+↑` `Ctrl+↓` jump between groups, and `Enter` opens a drop-down,
+  ticks a box or presses a button. In the editor, `←` `→` change the command
+  type. Manage, Recommended and Import Commands take `Space` to tick, `Enter`
+  or `F2` to edit and `Delete` to remove.
+
+### Changed
+
+- Settings save as you change them; the Save and Cancel buttons are gone.
+- A shortcut field records only after `Enter`, `Space` or a click, so
+  tabbing past it, or pressing `Esc`, no longer changes the shortcut.
+- Adding commands from "Find recommended commands" or an import ends with a
+  simple confirmation.
+- The one-time tips line in the launcher's footer is gone.
+
+### Fixed
+
+- Start menu programs are found on PCs where the profile folders are
+  redirected.
+- Dash could close unexpectedly if the command editor was shut the moment it
+  opened.
+
 ## [2.10.2] - 2026-09-24
 
 ### Fixed

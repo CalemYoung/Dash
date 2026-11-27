@@ -71,7 +71,7 @@ try:
     # Import the submodules directly rather than through the package's lazy
     # __getattr__: PyInstaller only bundles what it can see in static imports.
     from src.command_manager import CommandManager
-    from src.launcher_gui import MainWindow
+    from src.launcher_gui import MainWindow, wait_for_scans
     from src.launcher_hotkey import HotkeyListener
     from src.settings import Settings
     from src import theme
@@ -173,6 +173,8 @@ if __name__ == "__main__":
         listener.triggered.connect(window.activate_launcher)
         window.set_hotkey_listener(listener)
         app.aboutToQuit.connect(listener.stop)
+        # A fallback scan still running when Dash quits would abort it.
+        app.aboutToQuit.connect(wait_for_scans)
 
         # Later launches land here: "show" from the Start Menu or a desktop
         # shortcut, "add:<path>" from File Explorer's menu.

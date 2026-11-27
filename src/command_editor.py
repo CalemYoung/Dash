@@ -4,6 +4,8 @@ from enum import IntEnum
 from pathlib import Path
 
 from PyQt6.QtWidgets import (
+    QAbstractButton,
+    QWidget,
     QComboBox,
     QMessageBox,
     QFileDialog,
@@ -17,7 +19,7 @@ from PyQt6.QtWidgets import (
     QFileIconProvider,
     QCompleter,
 )
-from PyQt6.QtCore import Qt, QPoint, QRect, QSize, QUrl, QTimer, QFileInfo, pyqtSignal
+from PyQt6.QtCore import QEvent, QObject, Qt, QPoint, QRect, QSize, QUrl, QTimer, QFileInfo, pyqtSignal
 from PyQt6.QtGui import QIcon, QPixmap, QDesktopServices, QShortcut
 from PyQt6.QtNetwork import QNetworkAccessManager, QNetworkRequest, QNetworkReply
 
@@ -217,6 +219,8 @@ class AliasBox(QFrame):
     aliasesChanged = pyqtSignal()
     MAX_ALIASES = 18
     MAX_ALIAS_LENGTH = 32
+    # The editor's keyboard handler, given to each chip as it is added.
+    chip_filter = None
 
     def __init__(self, noun="alias", placeholder="Add alias, press \u21b5", keep_order=False):
         super().__init__()
@@ -302,6 +306,8 @@ class AliasBox(QFrame):
 
     def _insert_chip(self, text):
         chip = Alias(text, self, self.noun)
+        if self.chip_filter is not None:
+            chip.installEventFilter(self.chip_filter)
         if self.keep_order:
             self.aliases.append(chip)
         else:
@@ -375,9 +381,11 @@ class CommandTypeSelector(QFrame):
             button = QPushButton(type.label)
             button.setObjectName("typeSegment")
             button.setCheckable(True)
-            button.setAccessibleDescription("Command type")
+            button.setAccessibleName(type.label)
+            button.setAccessibleDescription("Command type. Left and right arrows change it")
             button.setCursor(Qt.CursorShape.PointingHandCursor)
             button.clicked.connect(lambda _checked, t=type: self.select(t))
+            button.installEventFilter(self)
             layout.addWidget(button)
             self.buttons[type] = button
 
@@ -387,7 +395,20 @@ class CommandTypeSelector(QFrame):
         self.selection = command_type
         for type, button in self.buttons.items():
             button.setChecked(type == command_type)
+            # One Tab stop for the whole row, like radio buttons: the chosen
+            # type. The arrow keys move between types.
+            button.setFocusPolicy(Qt.FocusPolicy.StrongFocus if type == command_type else Qt.FocusPolicy.ClickFocus)
         self.typeChanged.emit(command_type)
+
+    def eventFilter(self, watched, event):
+        if event.type() == QEvent.Type.KeyPress and event.key() in (Qt.Key.Key_Left, Qt.Key.Key_Right):
+            types = list(self.buttons)
+            step = -1 if event.key() == Qt.Key.Key_Left else 1
+            chosen = types[(types.index(self.selection) + step) % len(types)]
+            self.select(chosen)
+            self.buttons[chosen].setFocus(Qt.FocusReason.TabFocusReason)
+            return True
+        return super().eventFilter(watched, event)
 
 
 def _folder_glyph() -> QIcon:
@@ -963,6 +984,41 @@ def suggested_description(command_type: CommandType, location: str, name: str) -
 GROUP_ICON_RECIPE = {"glyph": "outline:STACK_2", "source": None, "color": "#f3f4f7", "background": "#4a3f66"}
 
 
+class EditorKeys(QObject):
+    """The editor's keyboard, the same as Settings':
+
+    ↑ / ↓ move to the previous or next field (the Tab order).
+    Enter presses a button and opens a drop-down, whose list then takes
+    ↑ / ↓ and Enter. ← / → change the command type on its row, and move
+    the cursor in text. Qt only gives Enter to buttons in dialogs, and the
+    editor is a panel in the launcher.
+    """
+
+    def __init__(self, panel: QWidget):
+        super().__init__(panel)
+        self.panel = panel
+
+    def eventFilter(self, watched, event):
+        if event.type() != QEvent.Type.KeyPress or not isinstance(watched, QWidget):
+            return False
+        if watched.window() is not self.panel.window():
+            return False  # an open list or completer keeps its keys
+        if event.modifiers() & ~Qt.KeyboardModifier.KeypadModifier:
+            return False
+        key = event.key()
+        if key in (Qt.Key.Key_Up, Qt.Key.Key_Down):
+            self.panel.focusNextPrevChild(key == Qt.Key.Key_Down)
+            return True
+        if key in (Qt.Key.Key_Return, Qt.Key.Key_Enter):
+            if isinstance(watched, QComboBox):
+                watched.showPopup()
+                return True
+            if isinstance(watched, QAbstractButton) and watched.isEnabled():
+                watched.click()
+                return True
+        return False
+
+
 class CommandEditorPanel(QFrame):
     """Full-panel editor for a single command.
 
@@ -1080,6 +1136,7 @@ class CommandEditorPanel(QFrame):
         self.command_description_edit_box = QLineEdit()
         self.command_description_edit_box.setObjectName("CommandDescriptionEditBox")
         self.command_description_edit_box.setPlaceholderText("Description")
+        self.command_description_edit_box.setAccessibleName("Description")
 
         command_description_column = QVBoxLayout()
         command_description_column.setContentsMargins(0, 0, 0, 0)
@@ -1197,6 +1254,14 @@ class CommandEditorPanel(QFrame):
         layout.addWidget(self.keyboard_hint, 0, Qt.AlignmentFlag.AlignRight)
 
         self._populate(self._command)
+        self._editor_keys = EditorKeys(self)
+        for widget in self.findChildren(QWidget):
+            reachable = widget.focusPolicy() & Qt.FocusPolicy.TabFocus or widget.objectName() == "typeSegment"
+            if reachable and not (widget.windowFlags() & Qt.WindowType.Popup):
+                widget.installEventFilter(self._editor_keys)
+        # Chips added later get the same keys.
+        for box in (self.alias_box, self.command_action.targets_box):
+            box.chip_filter = self._editor_keys
 
         self.command_action.command_action_edit_box.textChanged.connect(self._prefill_from_target)
         self.command_type_selector.typeChanged.connect(self._prefill_from_target)
@@ -1299,7 +1364,15 @@ class CommandEditorPanel(QFrame):
             self._auto_description = description
             self.command_description_edit_box.setText(description)
 
-    def prefill(self, name: str | None = None, target: str | None = None) -> None:
+    def prefill(
+        self,
+        name: str | None = None,
+        target: str | None = None,
+        aliases: list[str] | None = None,
+        description: str | None = None,
+        arguments: str | None = None,
+        working_folder: str | None = None,
+    ) -> None:
         """Fill in a new command as though the person had typed it.
 
         `target` is a file, program, shortcut (.lnk), folder or web address,
@@ -1309,7 +1382,9 @@ class CommandEditorPanel(QFrame):
         are then suggested from it, as when a target is picked by hand.
 
         `name`, when given, wins over the suggestion and is kept if the
-        target changes later, since the person chose it.
+        target changes later, since the person chose it. `aliases`,
+        `description` and the launch fields fill those in too (something
+        found on this PC brings them along).
 
         The fields change through their normal signals, so the editor is
         dirty afterwards (Save and Cancel show) and the name is checked for
@@ -1325,6 +1400,14 @@ class CommandEditorPanel(QFrame):
         if name:
             self.command_name_edit_box.setText(name)
             self._validate_name()
+        if aliases:
+            self.alias_box.set_aliases([str(alias) for alias in aliases])
+        if description:
+            self.command_description_edit_box.setText(str(description))
+        if arguments:
+            self.command_action.arguments_edit.setText(str(arguments))
+        if working_folder:
+            self.command_action.working_folder_edit.setText(str(working_folder))
         self._update_dirty_state()
         self.layoutChanged.emit()
 
