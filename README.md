@@ -3,38 +3,26 @@
 </h1>
 
 <p align="center">
-   <strong>Dash is a fast, predictable keyboard launcher for Windows.</strong>
-</p>
-
-<p align="center">
-   Your apps, files, folders and websites are a few letters away, and the same thing opens every time.
+   <strong>A keyboard launcher for Windows where the same letters always open the same thing.</strong>
 </p>
 
 <p align="center">
    <a href="https://github.com/CalemYoung/Dash/releases"><img src="https://img.shields.io/badge/download-Releases-2EA44F?style=flat-square&amp;logo=github" alt="Download from GitHub Releases"></a>
    <img src="https://img.shields.io/badge/platform-Windows-0078D4?style=flat-square" alt="Windows">
-   <img src="https://img.shields.io/badge/Python-3.11%2B-3776AB?style=flat-square&amp;logo=python&amp;logoColor=white" alt="Python 3.11 or later">
    <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-2EA44F?style=flat-square" alt="MIT License"></a>
 </p>
 
 ---
 
-## Features
+Press `Alt+Space`, type a few letters, and Dash opens the app, file, folder or
+website you gave those letters to. Nothing is indexed, so results are instant
+and never shuffle around.
 
-- **Instant access:** Open Dash from anywhere with a global hotkey: `Alt+Space` (configure in settings).
-- **Flexible commands:** Launch applications, files, folders, websites, Store apps and Windows Settings pages from one search box, with optional arguments and a start-in folder for apps.
-- **Aliases:** Add the terms you naturally type, so `gh` can open GitHub and `mail` your inbox.
-- **Instant aliases:** An alias opens its command as soon as you type it, with no Enter, whenever nothing else starts with the same letters.
-- **Site search:** Put `{query}` in a website's address and `gh dash` searches it, while `gh` on its own still opens the site.
-- **Groups:** One command that opens several others, in order, so a project's apps, folders and tabs start together.
-- **Quick calculations:** Work out sums like `12*8`, `200+15%` or `sqrt(2)` where you type; Enter copies the answer.
-- **Already open? Switch to it:** Opening an app that is running brings its window forward rather than starting a second copy.
-- **More than open:** Right-click a result (or use the keys below) to run it as administrator, open its folder, copy its path or open a new copy.
-- **Add from anywhere:** Copy a file or folder in Explorer and press `Ctrl+V` in Dash, drop a file, shortcut or link on it, or turn on "Add to Dash" in File Explorer's right-click menu, to make it a command. Type something that matches nothing and press `↓` to see matching apps, folders and sites on this PC to add, or `Ctrl+N` to add what you typed.
-- **Icons you pick:** Every command gets one on its own, and you can swap in a library glyph or your own image, recolor it, or go back to the one Dash found.
-- **Take it with you:** Export commands to a portable file and import them on another PC, icons and all.
-- **Keyboard all the way:** Settings and the command editor work without the mouse, and every change saves as you make it.
-- **Made to fit:** Light, dark or system theme, size, hotkeys, the display Dash opens on, the browser websites use, the web search engine, text sizes, the clock and the update check are all settings.
+```powershell
+winget install -e dash
+```
+
+Or download the installer from [Releases](https://github.com/CalemYoung/Dash/releases).
 
 ## Why another launcher?
 
@@ -42,203 +30,106 @@ Dash came out of using launchers that index everything on the machine. They
 lagged while typing, and being non-deterministic can mean searching for the
 correct result in a list. With Dash you only get what you expect.
 
-Dash does less on purpose:
+If you want a launcher that searches all your files, there are good options
+(Flow Launcher, Everything, PowerToys). Dash is for a simple launcher that only
+contains the commands you set.
 
-- **Only your commands.** Nothing is indexed. The list holds what you added,
-  so there is nothing in the results you don't care about. A one-off scan can
-  import your installed programs as a starting point, but you choose what
-  stays. When nothing matches, Dash can show what on this PC fits, but only
-  behind `↓`, and only to add as a command.
-- **Predictable matching.** Results are prefix matches on names and aliases,
-  followed by names with a later word that starts with what you typed (so
-  `code` finds Visual Studio Code). The same letters always narrow to the
-  same commands, an exact name or alias always comes first.
-- **Nothing between you and the command.** simply open, type and Enter.
+## What it does
 
-If you want a launcher that acts a search tool across all your files, there are many
-good options (flow launcher, everything, powertoys). Dash is for those who want
-a simple deterministic launcher containing only the commands you set.
-
-## See Dash in action
-
-### Search and launch
-
-Type a few letters and the name completes inline.
+- Opens apps, files, folders, websites, Store apps and Windows Settings pages.
+- Aliases: `gh` opens GitHub. If nothing else starts with those letters, the
+  alias opens as soon as you type it, no Enter needed.
+- Site search: give a website `{query}` in its address and `gh dash` searches it.
+- Groups: one command that opens several, in order.
+- Quick sums: `12*8` or `200+15%`, Enter copies the answer.
+- If an app is already open, Dash switches to it instead of starting another.
+- Type something you haven't added and press `↓` to see matching apps,
+  folders and sites on your PC, ready to add as a command.
+- Works entirely from the keyboard, Settings included.
 
 <p align="left">
-   <img src="assets/launcher-search.gif" alt="Typing into Dash: s narrows the list and completes to Spotify, the alias gh finds GitHub, and 12*8 shows 96" width="600">
+   <img src="assets/launcher-search.gif" alt="Typing into Dash: s completes to Spotify, the alias gh finds GitHub, and 12*8 shows 96" width="600">
 </p>
 
-### Search a website from the search box
-
-Give a website command an address with `{query}` in it and its name becomes a
-keyword: the name on its own opens the site, a space searches it.
-
 <p align="left">
-   <img src="assets/site-search.gif" alt="Typing gh finds GitHub; a space turns the row into Search GitHub, and typing dash makes it Search GitHub for dash" width="600">
-</p>
-
-### Edit a command, or build a group
-
-Press Ctrl+Enter on a result to edit it in place: name, description, type,
-target, browser, aliases and icon. A group is edited the same way, except its
-targets are other commands, and it opens them in the order they are listed.
-
-<p align="left">
-   <img src="assets/command-editor.gif" alt="The GitHub command open in the editor, where a second alias is typed and added as a chip" width="400">
-   <img src="assets/command-group.gif" alt="The Start work group open in the editor, where Steam is typed and added to the commands it opens" width="400">
+   <img src="assets/site-search.gif" alt="Typing gh finds GitHub; a space and dash turns it into a search of GitHub for dash" width="600">
 </p>
 
 ## Keys
 
-| Key | What it does |
+| Key | Does |
 | --- | --- |
-| `Alt+Space` | Open Dash from anywhere |
-| Type, then `Enter` | Open the selected command |
-| `↑` `↓` | Move through the results; the search box completes to the selected one |
-| `Tab` | Fill in the selected command's name or alias; a search keyword also gets its space, ready for the search text |
+| `Alt+Space` | Open Dash |
+| `Enter` | Open the selected command |
+| `Tab` | Complete the selected name or alias |
 | `Ctrl+Enter` | Edit the selected command |
-| `Shift+Enter` | Open a new copy, even if the app is already open |
-| `Ctrl+Shift+Enter` | Run the selected app as administrator |
-| `Alt+Enter` | Open the folder that holds the selected command |
-| Right-click, or the `Menu` key | More actions for the selected result |
-| `Ctrl+N` | Add a new command, starting from what you typed |
-| `Ctrl+,` | Open Settings |
-| `Esc` | Close Dash |
+| `Ctrl+N` | Add a new command from what you typed |
+| `Ctrl+,` | Settings |
+| Right-click | More: run as admin, open folder, copy path |
+| `Esc` | Close |
 
-The hotkey and the three `Ctrl` shortcuts are configurable under Settings.
-The keyboard icon at the bottom right of the launcher lists every key: hover
-over it, or click it.
+The keyboard icon in the launcher's corner lists the rest. The hotkey and
+shortcuts can be changed in Settings.
 
-## Install
+## Getting started
 
-With winget:
+The first time you open Dash, choose "Find recommended commands". It offers
+your installed programs, Windows tools and Settings pages, Quick Access
+folders, browser bookmarks and popular websites. Pick what you want; nothing
+is added until you do. Press `Ctrl+Enter` on any result to edit it.
 
-```powershell
-winget install -e dash
-```
-
-The `-e` is needed because a plain `winget install dash` also matches an
-unrelated Microsoft Store app. `winget install CalemYoung.Dash` works too.
-
-Or by hand:
-
-1. Download `DashSetup-<version>.exe` from the
-   [Releases page](https://github.com/CalemYoung/Dash/releases).
-2. Run the installer and choose whether Dash should create a desktop shortcut,
-    start when you sign in, or add "Add to Dash" to File Explorer's
-    right-click menu.
-3. Press `Alt+Space` to open Dash.
-
-Until you have added a command, opening Dash shows two rows: "Find recommended
-commands", and the Settings command beneath it. The scan offers your installed
-programs and Store apps, common Windows tools, the Windows Settings pages
-people actually open, the folders in Explorer's Quick Access and the bookmarks
-bar of any browser it finds. It also offers the websites most people want,
-Google, YouTube, Gmail, Maps, Wikipedia and the rest, with their search links
-already filled in, so `g` opens Google and `g dash` searches it.
-
-To tidy up later, open Settings and choose "Manage Commands..." to see,
-edit or delete every command at once
-
-Settings opens from the launcher: press `Ctrl+,`, or type "settings". The
-system tray menu can also open Dash and Settings, and holds the app itself:
-the install, config and log folders, the update check, About and Quit. Dash stores your configuration in
-`%APPDATA%\Dash`, so upgrades keep your settings and commands.
-
-Starting Dash from the Start Menu or a shortcut opens the search bar, and if
-Dash is already running it brings up the existing copy rather than a second
-one. Only the start-at-sign-in entry starts Dash silently in the tray; it
-passes `--startup` to do so.
-
-Dash checks GitHub for a new release once each time it starts and shows a
-single tray notification if there is one. Nothing is installed until you
-choose "Install and Restart", at which point the installer is downloaded,
-verified against the release's SHA-256 checksum, and run. Turn off "Check updates
-at startup" in Settings to stop the check, or use "Check for
-Updates..." in the tray menu at any time.
-
-If Dash can't use its hotkey because another app already has it, a tray
-notification says so; choose a different key under Settings.
+Settings and commands live in `%APPDATA%\Dash`, so updates keep them. Dash
+checks GitHub for updates when it starts and asks before installing anything.
 
 ## Privacy
 
-Dash has no telemetry. Your commands, settings and usage counts stay in
-`%APPDATA%\Dash`. It goes online only to check for updates, to fetch website
-icons, and when you open a website or search the web. Both the update check
-and icon downloads can be turned off in Settings. [PRIVACY.md](PRIVACY.md)
-lists every request.
+No telemetry. Dash only goes online to check for updates, fetch website icons
+and open the sites you ask for, and the first two can be turned off.
+[PRIVACY.md](PRIVACY.md) lists every request.
 
-## Troubleshooting
+## Problems
 
-Dash keeps a log at `%APPDATA%\Dash\logs\dash.log`; "Open Log Folder" in
-the tray menu takes you there. Please attach it when you
-[report a bug](https://github.com/CalemYoung/Dash/issues/new/choose). If a
-settings or commands file is damaged, Dash starts anyway, keeps the damaged
-file beside the original with `.bad` on the end, and tells you.
-
-What changed in each release: see [CHANGELOG.md](CHANGELOG.md).
+The log is at `%APPDATA%\Dash\logs\dash.log` ("Open Log Folder" in the tray
+menu). Attach it when you [report a bug](https://github.com/CalemYoung/Dash/issues/new/choose).
+Release notes are in [CHANGELOG.md](CHANGELOG.md).
 
 ## Development
 
-Dash requires Windows and Python 3.11 or later. To run it from source:
+Needs Windows and Python 3.11+.
 
 ```powershell
 py -3.11 -m venv .venv
 .\.venv\Scripts\Activate.ps1
-python -m pip install --upgrade pip
 python -m pip install -r requirements-dev.txt
 python dash.py
 ```
 
-Run the tests with `python -m pytest`. See [CONTRIBUTING.md](CONTRIBUTING.md)
-for more.
+Run the tests with `python -m pytest`. See [CONTRIBUTING.md](CONTRIBUTING.md).
 
 <details>
-<summary><strong>Build the Windows installer</strong></summary>
+<summary><strong>Building and releasing</strong></summary>
 
 <br>
 
-Install [Inno Setup 6](https://jrsoftware.org/isinfo.php), then run:
+Build the installer locally (needs [Inno Setup 6](https://jrsoftware.org/isinfo.php)):
 
 ```powershell
 .\.venv\Scripts\python.exe build\scripts\build_installer.py
 ```
 
-The build reads its version from `build/installer/version.txt` and writes the
-installer to `dist/DashSetup-<version>.exe`.
+It writes `dist/DashSetup-<version>.exe`, using the version in
+`build/installer/version.txt`.
 
-</details>
+To release, set that version, commit, then push a matching tag. GitHub
+Actions builds the installer and attaches it to the release.
 
-<details>
-<summary><strong>Publish a GitHub release</strong></summary>
-
-<br>
-
-Releases are built on GitHub's Windows runner. The workflow compiles the
-PyInstaller bundle with Inno Setup, verifies the installer, and attaches it to
-the GitHub Release. `build/installer/version.txt` is the only
-place the version is stored; the build stamps it into the exe and installer.
-
-1. Update `build/installer/version.txt` to the intended version, such as
-   `2.1.0`, and commit it.
-2. Create and push a matching version tag:
-
-   ```powershell
-   git tag v2.1.0
-   git push origin v2.1.0
-   ```
-
-3. Wait for the **Release** workflow to complete. The resulting
-   `DashSetup-2.1.0.exe` is available under GitHub Releases to share with
-   others.
-
-The tag must match `v` plus the version in `build/installer/version.txt`.
-Each run also produces a 14-day Actions artifact to help diagnose a failed
-release build.
+```powershell
+git tag v2.11.0
+git push origin v2.11.0
+```
 
 </details>
 
 ## License
 
-Dash is licensed under the [MIT License](LICENSE).
+[MIT](LICENSE)
